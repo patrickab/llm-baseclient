@@ -40,6 +40,19 @@ def _has_nvidia_gpu() -> bool:
     return False
 
 class LLMClient:
+    """
+    Hardware-Aware LLM Client supporting
+       - Open source: vLLM (GPU) / Ollama (CPU) / Huggingface.
+       - Commercial: OpenAI, Google Gemini, Anthropic Claude.
+
+    Supports:
+        - stateless & stateful interactions
+        - streaming & non-streaming responses
+        - text-only & multimodal inputs
+        - images provided as
+            (1) file paths or
+            (2) raw bytes
+    """
 
     def __init__(self) -> None:
 
@@ -170,15 +183,6 @@ class LLMClient:
         """
         Stateless API call using LiteLLM to unify the request format.
         Routes to the correct local/cloud API client.
-
-        For commercial models:
-            - OpenAI GPT
-            - Google Gemini
-            - Anthropic Claude
-
-        For local models:
-            - GPU: assumes vLLM
-            - CPU: assumes Ollama
         """
         if not isinstance(img, (Path, bytes, List[Path], List[bytes], type(None))):
             raise ValueError("img must be None, Path or bytes")
@@ -245,19 +249,7 @@ class LLMClient:
         stream: bool = True,
         **kwargs: Dict[str, any]
     ) -> Iterator[str]|ChatCompletion:
-        """
-        Stateful Chat Wrapper
-        Routes to the correct local/cloud API client.
-
-        For commercial models:
-            - OpenAI GPT
-            - Google Gemini
-            - Anthropic Claude
-
-        For local models:
-            - GPU: assumes vLLM
-            - CPU: assumes Ollama
-        """
+        """Stateful Chat Wrapper around api_query to maintain conversation history."""
 
         api_response = self.api_query(
             model=model,
