@@ -2,7 +2,7 @@ import base64
 from pathlib import Path
 import shutil
 import subprocess
-from typing import Dict, Iterator, List, Optional, Tuple
+from typing import Dict, Iterator, List, Optional, Tuple, Union
 
 from litellm import completion
 from openai.types.chat import ChatCompletion
@@ -47,30 +47,32 @@ class LLMClient:
 
     # ----------------------------------- Data Wrangling ---------------------------------- #
 
-    def _img_path_to_base64(self, img_path: Path) -> str:
-        """Convert image file to base64 string."""
-        with open(img_path, "rb") as img_file:
-            encoded_string = base64.b64encode(img_file.read()).decode('utf-8')
-        return f"data:image/{img_path.suffix[1:]};base64,{encoded_string}"
-
-    def _img_bytes_to_base64(self, img_bytes: bytes) -> str:
-        """Convert image bytes to base64 string."""
-        # Detect image format from magic bytes
-        if img_bytes.startswith(b'\xff\xd8\xff'):
-            img_format = 'jpeg'
-        elif img_bytes.startswith(b'\x89PNG'):
-            img_format = 'png'
-        elif img_bytes.startswith(b'GIF8'):
-            img_format = 'gif'
-        elif img_bytes.startswith(b'RIFF') and img_bytes[8:12] == b'WEBP':
-            img_format = 'webp'
-        elif img_bytes.startswith(b'BM'):
-            img_format = 'bmp'
+    def _process_image(self, img: Union[Path, bytes, str]) -> str:
+        """Standardizes image input to Base64 string."""
+        if isinstance(img, str) and img.startswith("data:image"):
+            return img # Already base64
+        
+        if isinstance(img, (Path, str)):
+            path = Path(img)
+            if not path.exists():
+                raise FileNotFoundError(f"Image not found: {path}")
+            with open(path, "rb") as img_file:
+                data = img_file.read()
+                mime_type = f"image/{path.suffix[1:].lower()}"
+                if mime_type == "image/jpg": mime_type = "image/jpeg"
+        elif isinstance(img, bytes):
+            data = img
+            # Magic byte detection
+            if data.startswith(b'\xff\xd8'): mime_type = "image/jpeg"
+            elif data.startswith(b'\x89PNG'): mime_type = "image/png"
+            elif data.startswith(b'GIF8'): mime_type = "image/gif"
+            elif data.startswith(b'RIFF'): mime_type = "image/webp"
+            else: mime_type = "image/jpeg" # Default fallback
         else:
-            raise ValueError("Unsupported image format")
+            raise ValueError("Unsupported image type")
 
-        encoded_string = base64.b64encode(img_bytes).decode('utf-8')
-        return f"data:image/{img_format};base64,{encoded_string}"
+        encoded_string = base64.b64encode(data).decode('utf-8')
+        return f"data:{mime_type};base64,{encoded_string}"
 
     # -------------------------------- Core LLM Interaction -------------------------------- #
 
@@ -92,22 +94,17 @@ class LLMClient:
         """
         if not isinstance(img, (Path, bytes, List[Path], List[bytes], type(None))):
             raise ValueError("img must be None, Path or bytes")
-
-        if isinstance(img, Path):
-            img_data = self._img_path_to_base64(img)
-            img_data = [img_data]
-        elif isinstance(img, bytes):
-            img_data = self._img_bytes_to_base64(img)
-            img_data = [img_data]
-        elif isinstance(img, list):
-            img_data = []
-            for item in img:
-                if isinstance(item, Path):
-                    img_data.append(self._img_path_to_base64(item))
-                elif isinstance(item, bytes):
-                    img_data.append(self._img_bytes_to_base64(item))
+        else:
+            if img is None:
+                img_data = None
+            else:
+                if isinstance(img, list):
+                    img_data = []
+                    for i in img:
+                        img_data.append(self._process_image(i))
                 else:
-                    raise ValueError("img list items must be of type Path or bytes")
+                    img_data = self._process_image(img)
+                    img_data = [img_data]
 
         # 1. Set defaults
         api_base = None
