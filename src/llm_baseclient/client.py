@@ -38,11 +38,6 @@ def _has_nvidia_gpu() -> bool:
 
     return False
 
-API_CLIENT_INFO = {
-    "is_ollama_installed": shutil.which("ollama") is not None,
-    "is_gpu_available": False #_has_nvidia_gpu() # GPU behavior remains to be tested
-}
-
 class LLMClient:
 
     def __init__(self) -> None:
