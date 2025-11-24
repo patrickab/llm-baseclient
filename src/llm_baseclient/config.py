@@ -52,6 +52,6 @@ MODELS_GEMINI: List[str] = [
     "gemini-1.5-flash-8b",
     
     # Embeddings & Specialized
-    "text-embedding-004",
+    "text-embedding-001",
     "aqa"
 ]
