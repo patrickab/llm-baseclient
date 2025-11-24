@@ -113,7 +113,7 @@ class LLMClient:
     def get_embedding(
         self, model: str,
         input_text: Union[str, List[str]],
-        **kwargs: Dict[str, any]
+        **model_kwargs: Dict[str, any]
     ) -> EmbeddingResponse:
         """
         Get embeddings using LiteLLM to unify the request format.
@@ -127,23 +127,40 @@ class LLMClient:
         For local models:
             - GPU: assumes vLLM
             - CPU: assumes Ollama
+
+        Args:
+            model (str): Model name without provider prefix.
+            input_text (Union[str, List[str]]): Single text string or list of text strings to embed.
+            **model_kwargs (Dict[str, any]): Additional model-specific parameters passed to the embedding API.
+
+        Returns:
+            EmbeddingResponse: Response object containing embedding vectors and metadata.
+
+        Raises:
+            Exception: If model provider cannot be determined or API request fails.
+
+        Example:
+            >>> client = LLMBaseClient()
+            >>> response = client.get_embedding("text-embedding-ada-002", "Hello world")
+            >>> embeddings = response.data[0].embedding
         """
         api_base = None
         custom_llm_provider = None
 
         api_base, custom_llm_provider, model = self._determine_provider(model)
+        model_kwargs = {"extra_body": model_kwargs}
 
         response = embedding(
             model=model,
             input=input_text,
             api_base=api_base,
             custom_llm_provider=custom_llm_provider,
-            **kwargs
+            **model_kwargs
         )
         return response
 
-    def api_query(
-        self, model: str,
+    def api_query(self,
+        model: str,
         user_message: Optional[str] = None,
         system_prompt: Optional[str] = None,
         img: Optional[Path | List[Path] | bytes | List[bytes]] = None,
