@@ -148,7 +148,7 @@ class LLMClient:
         custom_llm_provider = None
 
         api_base, custom_llm_provider, model = self._determine_provider(model)
-        model_kwargs = {"extra_body": model_kwargs}
+        model_kwargs = {"extra_body": model_kwargs} if custom_llm_provider else model_kwargs
 
         response = embedding(
             model=model,
