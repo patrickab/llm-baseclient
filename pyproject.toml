@@ -1,9 +1,10 @@
 [project]
-name = "template"
+name = "llm-baseclient"
 version = "0.1.0"
 requires-python = ">=3.12"
 dependencies = [
-    "something>=4.2.0"
+    "litellm>=1.80.5",
+    "streamlit-paste-button>=0.1.2"
 ]
 
 [build-system]
@@ -11,7 +12,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/template"] 
+packages = ["src/llm_baseclient"] 
 
 [tool.ruff]
 target-version = "py312"
