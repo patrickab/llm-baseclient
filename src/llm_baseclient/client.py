@@ -75,6 +75,39 @@ class LLMClient:
         encoded_string = base64.b64encode(data).decode('utf-8')
         return f"data:{mime_type};base64,{encoded_string}"
 
+    def _determine_provider(self, model: str) -> Tuple[str, Optional[str], Optional[str]]:
+        """
+        Determine the API base and custom provider based on model name.
+        Returns (api_base, custom_llm_provider)
+        """
+
+        is_cloud_model = (model in MODELS_OPENAI) or (model in MODELS_GEMINI) or (model in MODELS_ANTHROPIC)
+
+        if not is_cloud_model:
+            # Routing Logic: Prefer vLLM (GPU) > Ollama (CPU)
+            if _has_nvidia_gpu():
+                # Use vLLM settings
+                api_base = str(self.vllm_client.base_url)
+                custom_llm_provider = "openai" # vLLM mimics OpenAI
+                raise NotImplementedError("Local vLLM integration is not yet tested.")
+            else:
+                # Use Ollama settings
+                model = f"ollama/{model}"
+                api_base = "http://localhost:11434"
+                custom_llm_provider = "ollama"
+        else:
+            api_base = None
+            custom_llm_provider = None
+
+            if model in MODELS_OPENAI:
+                model = f"openai/{model}"
+            elif model in MODELS_GEMINI:
+                model = f"gemini/{model}"
+            elif model in MODELS_ANTHROPIC:
+                model = f"anthropic/{model}"
+
+        return api_base, custom_llm_provider, model
+
     # -------------------------------- Core LLM Interaction -------------------------------- #
 
     def get_embedding(
@@ -86,6 +119,11 @@ class LLMClient:
         Get embeddings using LiteLLM to unify the request format.
         Routes to the correct local/cloud API client.
 
+        For commercial models:
+            - OpenAI GPT
+            - Google Gemini
+            - Anthropic Claude
+
         For local models:
             - GPU: assumes vLLM
             - CPU: assumes Ollama
@@ -93,24 +131,7 @@ class LLMClient:
         api_base = None
         custom_llm_provider = None
 
-        is_cloud_model = (model in MODELS_OPENAI) or (model in MODELS_GEMINI) or (model in MODELS_ANTHROPIC)
-        if is_cloud_model:
-            if model in MODELS_OPENAI:
-                model = f"openai/{model}"
-            elif model in MODELS_GEMINI:
-                model = f"gemini/{model}"
-            elif model in MODELS_ANTHROPIC:
-                model = f"anthropic/{model}"
-        else:
-            if _has_nvidia_gpu():
-                raise NotImplementedError("Local embedding models on GPU are not yet supported.")
-            else:
-                api_base = "http://localhost:11434"
-                custom_llm_provider = "ollama"
-
-                if not model.startswith("ollama/"):
-                    model = f"ollama/{model}"
-
+        api_base, custom_llm_provider, model = self._determine_provider(model)
 
         response = embedding(
             model=model,
@@ -133,6 +154,11 @@ class LLMClient:
         Stateless API call using LiteLLM to unify the request format.
         Routes to the correct local/cloud API client.
 
+        For commercial models:
+            - OpenAI GPT
+            - Google Gemini
+            - Anthropic Claude
+
         For local models:
             - GPU: assumes vLLM
             - CPU: assumes Ollama
@@ -151,11 +177,7 @@ class LLMClient:
                     img_data = self._process_image(img)
                     img_data = [img_data]
 
-        # 1. Set defaults
-        api_base = None
-        custom_llm_provider = None
-
-        # 2. Prepare Messages
+        # 1. Prepare Messages
         messages = []
         if system_prompt:
             messages.append({"role": "system", "content": system_prompt})
@@ -173,33 +195,10 @@ class LLMClient:
 
             messages.append({"role": "user", "content": content_payload})
 
-        # 3. Determine Provider
-        is_cloud_model = (model in MODELS_OPENAI) or (model in MODELS_GEMINI) or (model in MODELS_ANTHROPIC)
+        # 2. Determine Provider
+        api_base, custom_llm_provider, model = self._determine_provider(model)
 
-        if not is_cloud_model:
-            # Routing Logic: Prefer vLLM (GPU) > Ollama (CPU)
-            if _has_nvidia_gpu():
-                # Use vLLM settings
-                api_base = str(self.vllm_client.base_url)
-                custom_llm_provider = "openai" # vLLM mimics OpenAI
-
-            else:
-                # Use Ollama settings
-                api_base = "http://localhost:11434"
-                custom_llm_provider = "ollama"
-
-                # LiteLLM requires 'ollama/' prefix
-                if not model.startswith("ollama/"):
-                    model = f"ollama/{model}"
-        else:
-            if model in MODELS_OPENAI:
-                model = f"openai/{model}"
-            elif model in MODELS_GEMINI:
-                model = f"gemini/{model}"
-            elif model in MODELS_ANTHROPIC:
-                model = f"anthropic/{model}"
-
-        # 4. Execute request via LiteLLM
+        # 3. Execute request via LiteLLM
         try:
             assert messages[0]['role'] == 'system'
             response = completion(
@@ -232,6 +231,11 @@ class LLMClient:
         """
         Stateful Chat Wrapper
         Routes to the correct local/cloud API client.
+
+        For commercial models:
+            - OpenAI GPT
+            - Google Gemini
+            - Anthropic Claude
 
         For local models:
             - GPU: assumes vLLM
