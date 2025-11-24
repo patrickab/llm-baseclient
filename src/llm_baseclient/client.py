@@ -78,14 +78,17 @@ class LLMClient:
         self, model: str,
         user_message: Optional[str] = None,
         system_prompt: Optional[str] = None,
-        chat_history: Optional[List[Tuple[str, str]]] = None,
         img: Optional[Path | List[Path] | bytes | List[bytes]] = None,
         stream: bool = True,
         **kwargs: Dict[str, any]
     ) -> Iterator[str] | ChatCompletion:
         """
         Stateless API call using LiteLLM to unify the request format.
-        Routes to the correct local/cloud settings based on __init__ detection.
+        Routes to the correct local/cloud API client.
+
+        For local models:
+            - GPU: assumes vLLM
+            - CPU: assumes Ollama
         """
         if not isinstance(img, (Path, bytes, List[Path], List[bytes], type(None))):
             raise ValueError("img must be None, Path or bytes")
@@ -114,8 +117,8 @@ class LLMClient:
         messages = []
         if system_prompt:
             messages.append({"role": "system", "content": system_prompt})
-        if chat_history:
-            messages.extend(chat_history)
+        if self.messages:
+            messages.extend(self.messages)
         if user_message or img:
             content_payload = []
             if user_message is not None:
@@ -176,3 +179,39 @@ class LLMClient:
 
         except Exception as e:
             yield f"API Error: {e!s}"
+
+    def chat(self, model: str,
+        user_message: str,
+        system_prompt: Optional[str] = "",
+        img: Optional[Path | List[Path] | bytes | List[bytes]] = None,
+        stream: bool = True,
+        **kwargs: Dict[str, any]
+    ) -> Iterator[str]|ChatCompletion:
+        """
+        Stateful Chat Wrapper
+        Routes to the correct local/cloud API client.
+
+        For local models:
+            - GPU: assumes vLLM
+            - CPU: assumes Ollama
+        """
+
+        api_response = self.api_query(
+            model=model,
+            user_message=user_message,
+            system_prompt=system_prompt,
+            img=img,
+            **kwargs)
+
+        if stream is False:
+            response = api_response
+            self.messages.append({"role": "user", "content": user_message})
+            self.messages.append({"role": "assistant", "content": response.choices[0].message.content})
+            return response
+        else:
+            response = ""
+            for chunk in api_response:
+                response += chunk
+                yield chunk
+            self.messages.append({"role": "user", "content": user_message})
+            self.messages.append({"role": "assistant", "content": response})
