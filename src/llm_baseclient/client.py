@@ -4,7 +4,8 @@ import shutil
 import subprocess
 from typing import Dict, Iterator, List, Optional, Tuple, Union
 
-from litellm import completion
+from litellm import completion, embedding
+from litellm.utils import EmbeddingResponse  # ModelResponse
 from openai.types.chat import ChatCompletion
 
 from .config import MODELS_ANTHROPIC, MODELS_GEMINI, MODELS_OPENAI
@@ -75,6 +76,38 @@ class LLMClient:
         return f"data:{mime_type};base64,{encoded_string}"
 
     # -------------------------------- Core LLM Interaction -------------------------------- #
+
+    def get_embedding(
+        self, model: str,
+        input_text: Union[str, List[str]],
+        **kwargs: Dict[str, any]
+    ) -> EmbeddingResponse:
+        """
+        Get embeddings using LiteLLM to unify the request format.
+        Routes to the correct local/cloud API client.
+
+        For local models:
+            - GPU: assumes vLLM
+            - CPU: assumes Ollama
+        """
+        # 3. Determine Provider
+        is_cloud_model = (model in MODELS_OPENAI) or (model in MODELS_GEMINI) or (model in MODELS_ANTHROPIC)
+        if is_cloud_model:
+            if model in MODELS_OPENAI:
+                model = f"openai/{model}"
+            elif model in MODELS_GEMINI:
+                model = f"gemini/{model}"
+            elif model in MODELS_ANTHROPIC:
+                model = f"anthropic/{model}"
+        else:
+            raise ValueError("Embeddings are only supported for cloud models currently.")
+
+        response = embedding(
+            model=model,
+            input=input_text,
+            **kwargs
+        )
+        return response
 
     def api_query(
         self, model: str,
