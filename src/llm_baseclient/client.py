@@ -45,7 +45,7 @@ class LLMClient:
         self.messages: List[Tuple[str, str]] = [] # [role, message] - only store text for efficiency
         self.sys_prompt = ""
 
-    # -------------------------------- Core LLM Interaction -------------------------------- #
+    # ----------------------------------- Data Wrangling ---------------------------------- #
 
     def _img_path_to_base64(self, img_path: Path) -> str:
         """Convert image file to base64 string."""
@@ -71,6 +71,8 @@ class LLMClient:
 
         encoded_string = base64.b64encode(img_bytes).decode('utf-8')
         return f"data:image/{img_format};base64,{encoded_string}"
+
+    # -------------------------------- Core LLM Interaction -------------------------------- #
 
     def api_query(
         self, model: str,
