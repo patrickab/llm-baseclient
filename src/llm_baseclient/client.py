@@ -5,6 +5,7 @@ import subprocess
 from typing import Dict, Iterator, List, Optional, Tuple
 
 from litellm import completion
+from openai.types.chat import ChatCompletion
 
 from .config import MODELS_ANTHROPIC, MODELS_GEMINI, MODELS_OPENAI
 
@@ -82,8 +83,9 @@ class LLMClient:
         system_prompt: Optional[str] = None,
         chat_history: Optional[List[Tuple[str, str]]] = None,
         img: Optional[Path | List[Path] | bytes | List[bytes]] = None,
+        stream: bool = True,
         **kwargs: Dict[str, any]
-    ) -> Iterator[str]:
+    ) -> Iterator[str] | ChatCompletion:
         """
         Stateless API call using LiteLLM to unify the request format.
         Routes to the correct local/cloud settings based on __init__ detection.
@@ -161,16 +163,19 @@ class LLMClient:
             response = completion(
                 model=model,
                 messages=messages,
-                stream=True,
+                stream=stream,
                 api_base=api_base,
                 custom_llm_provider=custom_llm_provider,
                 **kwargs # Pass temperature, top_p, etc.
             )
 
-            for chunk in response:
-                content = chunk.choices[0].delta.content
-                if content:
-                    yield content
+            if stream is False:
+                return response
+            else:
+                for chunk in response:
+                    content = chunk.choices[0].delta.content
+                    if content:
+                        yield content
 
         except Exception as e:
             yield f"API Error: {e!s}"
