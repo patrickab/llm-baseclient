@@ -90,7 +90,9 @@ class LLMClient:
             - GPU: assumes vLLM
             - CPU: assumes Ollama
         """
-        # 3. Determine Provider
+        api_base = None
+        custom_llm_provider = None
+
         is_cloud_model = (model in MODELS_OPENAI) or (model in MODELS_GEMINI) or (model in MODELS_ANTHROPIC)
         if is_cloud_model:
             if model in MODELS_OPENAI:
@@ -100,11 +102,21 @@ class LLMClient:
             elif model in MODELS_ANTHROPIC:
                 model = f"anthropic/{model}"
         else:
-            raise ValueError("Embeddings are only supported for cloud models currently.")
+            if _has_nvidia_gpu():
+                raise NotImplementedError("Local embedding models on GPU are not yet supported.")
+            else:
+                api_base = "http://localhost:11434"
+                custom_llm_provider = "ollama"
+
+                if not model.startswith("ollama/"):
+                    model = f"ollama/{model}"
+
 
         response = embedding(
             model=model,
             input=input_text,
+            api_base=api_base,
+            custom_llm_provider=custom_llm_provider,
             **kwargs
         )
         return response
