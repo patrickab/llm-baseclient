@@ -40,18 +40,10 @@ MODELS_OPENAI: List[str] = [
 
 # Google Gemini Models (Updated for Nov 2025)
 MODELS_GEMINI: List[str] = [
-    # Gemini 3.0 & 2.5 (Current Flagships)
     "gemini-3.0-pro",
     "gemini-2.5-pro",
     "gemini-2.5-flash",
-    "gemini-2.0-flash-thinking-exp",
-    
-    # Gemini 1.5 (Stable Legacy)
-    "gemini-1.5-pro-002",
-    "gemini-1.5-flash-002",
-    "gemini-1.5-flash-8b",
-    
-    # Embeddings & Specialized
+    "gemini-2.5-flash-lite",
+
     "gemini-embedding-001",
-    "aqa"
 ]

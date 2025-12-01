@@ -184,19 +184,13 @@ class LLMClient:
         Stateless API call using LiteLLM to unify the request format.
         Routes to the correct local/cloud API client.
         """
-        if not isinstance(img, (Path, bytes, List[Path], List[bytes], type(None))):
-            raise ValueError("img must be None, Path or bytes")
-        else:
-            if img is None:
-                img_data = None
+        img_data = []
+        if img is not None:
+            if isinstance(img, (list, tuple)):
+                items = img
             else:
-                if isinstance(img, list):
-                    img_data = []
-                    for i in img:
-                        img_data.append(self._process_image(i))
-                else:
-                    img_data = self._process_image(img)
-                    img_data = [img_data]
+                items = [img]
+                img_data = [self._process_image(i) for i in items]
 
         # 1. Prepare Messages
         messages = []
