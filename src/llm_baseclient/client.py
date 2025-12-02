@@ -186,11 +186,8 @@ class LLMClient:
         """
         img_data = []
         if img is not None:
-            if isinstance(img, (list, tuple)):
-                items = img
-            else:
-                items = [img]
-                img_data = [self._process_image(i) for i in items]
+            items = img if isinstance(img, (list, tuple)) else [img]
+            img_data = [self._process_image(i) for i in items]
 
         # 1. Prepare Messages
         messages = []
@@ -206,7 +203,7 @@ class LLMClient:
             if img is not None:
                 # Multimodal Format: List of dictionaries
                 for img_b64 in img_data:
-                    content_payload.append({"type": "image", "image_data": img_b64})
+                    content_payload.append({"type": "image_url", "image_url": {"url":img_b64}})
 
             messages.append({"role": "user", "content": content_payload})
 
@@ -215,7 +212,6 @@ class LLMClient:
 
         # 3. Execute request via LiteLLM
         try:
-            assert messages[0]['role'] == 'system'
             response = completion(
                 model=model,
                 messages=messages,
