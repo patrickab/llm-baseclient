@@ -15,9 +15,9 @@ from pathlib import Path
 import socket
 import subprocess
 import time
-import filetype
 from typing import Dict, Iterator, List, Optional, Tuple, Union
 
+import filetype
 from litellm import completion, embedding
 from litellm.utils import EmbeddingResponse
 from openai.types.chat import ChatCompletion
