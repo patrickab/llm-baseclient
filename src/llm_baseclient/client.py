@@ -27,7 +27,7 @@ from llm_baseclient.config import OLLAMA_PORT, VLLM_BASE_URL, VLLM_GPU_UTIL, VLL
 
 # ----------------------------------- Server Manager --------------------------------- #
 
-class LocalServerManager:
+class _LocalServerManager:
     """
     Manages server processes for vLLM or Ollama.
     Assumes requested models to be available.
@@ -178,12 +178,12 @@ class LLMClient:
     def __init__(self) -> None:
         """
         Initializes the LLMClient with an empty message history, an empty system prompt,
-        and a LocalServerManager for handling local inference servers.
+        and a _LocalServerManager for handling local inference servers.
         """
         # Stores conversation history as a list of (role, message) tuples.
         # Only text content is stored for efficiency; multimodal inputs are processed on-the-fly.
         self.messages: List[Dict[str, str]] = []
-        self.server_manager = LocalServerManager()
+        self.server_manager = _LocalServerManager()
 
     # ----------------------------------- Data Wrangling ---------------------------------- #
     def _process_image(self, img: Union[Path, bytes, str]) -> str:
