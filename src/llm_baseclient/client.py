@@ -26,46 +26,6 @@ import requests
 
 from llm_baseclient.config import OLLAMA_PORT, VLLM_BASE_URL, VLLM_GPU_UTIL, VLLM_PORT
 
-# ----------------------------------- Helpers --------------------------------- #
-
-def _get_running_vllm_model(base_url: str) -> Optional[str]:
-    """
-    Queries the vLLM /v1/models endpoint to check which model is loaded.
-    Returns the model ID string if running, or None if connection fails.
-    """
-    try:
-        # vLLM is OpenAI compatible, so it returns {"data": [{"id": "model_name", ...}]}
-        resp = requests.get(f"{base_url}/v1/models", timeout=1)
-        if resp.status_code == 200:
-            data = resp.json()
-            if "data" in data and len(data["data"]) > 0:
-                return data["data"][0]["id"]
-    except requests.RequestException:
-        pass
-    return None
-
-def _is_port_open(port: int) -> bool:
-    """Checks if a localhost port is occupied."""
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-        return sock.connect_ex(('localhost', port)) == 0
-
-def _wait_for_server(url: str, timeout: int = 60) -> bool:
-    """
-    Health Check: Blocks until server returns 200 OK.
-    Bigger models may need longer startup times.
-    """
-    start_time = time.time()
-    print(f"Waiting for local inference server at {url}...")
-    while time.time() - start_time < timeout:
-        try:
-            # vLLM and Ollama usually have /health or /v1/models endpoints
-            requests.get(url, timeout=1)
-            print(f"...inference server spawned at {url}.")
-            return True
-        except requests.ConnectionError:
-            time.sleep(2)
-    return False
-
 # ----------------------------------- Server Manager --------------------------------- #
 
 class LocalServerManager:
@@ -80,84 +40,6 @@ class LocalServerManager:
         self._process: Optional[subprocess.Popen] = None
         atexit.register(self.stop_server)
 
-    def _kill_process_on_port(self, port: int) -> None:
-        """Finds any process listening on the specified port and terminates it."""
-
-        for proc in psutil.process_iter(['pid', 'name']):
-            try:
-                for conn in proc.net_connections(kind='inet'):
-                    if conn.laddr.port == port:
-                        print(f"Port {port} occupied by PID {proc.info['pid']} ({proc.info['name']}). Terminating...")
-                        proc.terminate()
-                        try:
-                            proc.wait(timeout=5)
-                        except psutil.TimeoutExpired:
-                            proc.kill() # Force kill if terminate fails
-            except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
-                continue
-
-        print(f"Port {port} is free.")
-
-    def ensure_vllm(self, model_name: str) -> None:
-
-        if _get_running_vllm_model(VLLM_BASE_URL) == model_name:
-            print(f"vLLM is already serving {model_name}. Connecting...")
-            return
-
-        print(f"Switching to vLLM ({model_name}). Terminating processes on Ports {VLLM_PORT} and {OLLAMA_PORT} to free CPU/GPU...")
-        self._kill_process_on_port(VLLM_PORT)
-        self._kill_process_on_port(OLLAMA_PORT)
-
-        print(f"Spawning vLLM server for {model_name}...")
-        try:
-            cmd = [
-                sys.executable, "-m", "vllm.entrypoints.openai.api_server",
-                "--model", model_name,
-                "--port", str(VLLM_PORT),
-                "--trust-remote-code",
-                "--gpu-memory-utilization", str(VLLM_GPU_UTIL)
-            ]
-
-            # Redirect stdout/stderr to devnull to keep client clean.
-            self._process = subprocess.Popen(
-                cmd, 
-                stdout=subprocess.DEVNULL, 
-                stderr=subprocess.DEVNULL
-            )
-        except FileNotFoundError:
-            raise RuntimeError("vLLM is not installed. Install via:  pip install vllm")
-        
-        if not _wait_for_server(f"http://localhost:{VLLM_PORT}/v1/models"):
-            self.stop_server()
-            raise RuntimeError("Failed to start vLLM server.")
-
-    def ensure_ollama(self) -> None:
-
-        # 1. Check ports
-        ollama_open = _is_port_open(OLLAMA_PORT)
-        vllm_open = _is_port_open(VLLM_PORT)
-
-        # 2. Fast Path
-        if ollama_open:
-            if vllm_open:
-                self._kill_process_on_port(VLLM_PORT)
-            return
-
-        # 3. Startup: If Ollama wasn't open, start it.
-        if not ollama_open:
-
-            # Potential zombie process cleanup
-            self._kill_process_on_port(OLLAMA_PORT) 
-
-            print("Spawning Ollama server process...")
-            try:
-                self._process = subprocess.Popen(["ollama", "serve"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                if not _wait_for_server(f"http://localhost:{OLLAMA_PORT}"):
-                    self.stop_server()
-                    raise RuntimeError("Ollama failed to start.")
-            except FileNotFoundError:
-                raise RuntimeError("Ollama not found. Install via 'curl -fsSL https://ollama.com/install.sh | sh'")
-
     def stop_server(self) -> None:
         """Terminates any running local inference server."""
         if self._process:
@@ -168,6 +50,118 @@ class LocalServerManager:
             except Exception:
                 self._process.kill()
             self._process = None
+
+    def _is_port_open(self, port: int) -> bool:
+        """Checks if a localhost port is occupied."""
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            return sock.connect_ex(('localhost', port)) == 0
+
+    def _kill_processes_on_ports(self, *ports: int) -> None:
+        """Terminates any processes listening on the specified ports."""
+        for port in ports:
+            for proc in psutil.process_iter(['pid', 'name']):
+                try:
+                    for conn in proc.net_connections(kind='inet'):
+                        if conn.laddr.port == port:
+                            print(f"Port {port} occupied by PID {proc.info['pid']} ({proc.info['name']}). Terminating...")
+                            proc.terminate()
+                            try:
+                                proc.wait(timeout=5)
+                            except psutil.TimeoutExpired:
+                                proc.kill()
+                except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+                    continue
+            print(f"Port {port} is free.")
+
+
+    def _get_running_vllm_model(self, base_url: str) -> Optional[str]:
+        """
+        Queries the vLLM /v1/models endpoint to check which model is loaded.
+        Returns the model ID string if running, or None if connection fails.
+        """
+        try:
+            # vLLM is OpenAI compatible, so it returns {"data": [{"id": "model_name", ...}]}
+            resp = requests.get(f"{base_url}/v1/models", timeout=1)
+            if resp.status_code == 200:
+                data = resp.json()
+                if "data" in data and len(data["data"]) > 0:
+                    return data["data"][0]["id"]
+        except requests.RequestException:
+            pass
+        return None
+
+    def _wait_for_server(self, url: str, timeout: int = 60) -> bool:
+        """
+        Health Check: Blocks until server returns 200 OK.
+        Bigger models may need longer startup times.
+        """
+        start_time = time.time()
+        print(f"Waiting for local inference server at {url}...")
+        while time.time() - start_time < timeout:
+            try:
+                # vLLM and Ollama usually have /health or /v1/models endpoints
+                requests.get(url, timeout=1)
+                print(f"...inference server spawned at {url}.")
+                return True
+            except requests.ConnectionError:
+                time.sleep(2)
+        return False
+
+    def _spawn_server(self, cmd: list[str], health_check_url: str, install_hint: str) -> None:
+        """
+        Spawns a server process, waits for it to become healthy, and handles startup errors.
+        """
+        try:
+            self._process = subprocess.Popen(
+                cmd,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL
+            )
+        except FileNotFoundError:
+            raise RuntimeError(install_hint)
+
+        if not self._wait_for_server(health_check_url):
+            self.stop_server()
+            raise RuntimeError(f"Failed to start server at {health_check_url}.")
+
+    def ensure_vllm(self, model_name: str) -> None:
+        # Check if vLLM is already running the requested model
+        if self._get_running_vllm_model(VLLM_BASE_URL) == model_name:
+            print(f"vLLM is already serving {model_name}. Connecting...")
+            return
+
+        print(f"Switching to vLLM ({model_name}). Terminating processes on Ports {VLLM_PORT} and {OLLAMA_PORT} to free CPU/GPU...")
+        self._kill_processes_on_ports(VLLM_PORT, OLLAMA_PORT)
+
+        print(f"Spawning vLLM server for {model_name}...")
+        vllm_cmd = [
+            sys.executable, "-m", "vllm.entrypoints.openai.api_server",
+            "--model", model_name, "--port", str(VLLM_PORT),
+            "--trust-remote-code", "--gpu-memory-utilization", str(VLLM_GPU_UTIL)
+        ]
+        vllm_health_url = f"http://localhost:{VLLM_PORT}/v1/models"
+        self._spawn_server(vllm_cmd, vllm_health_url, "vLLM is not installed. Install via:  pip install vllm")
+
+    def ensure_ollama(self) -> None:
+        # 1. Check ports
+        ollama_open = self._is_port_open(OLLAMA_PORT)
+        vllm_open = self._is_port_open(VLLM_PORT)
+
+        # 2. Fast Path
+        if ollama_open:
+            if vllm_open:
+                self._kill_processes_on_ports(VLLM_PORT)
+            return
+
+        # 3. Startup: If Ollama wasn't open, start it.
+        if not ollama_open:
+            # Potential zombie process cleanup
+            self._kill_processes_on_ports(OLLAMA_PORT)
+
+            print("Spawning Ollama server process...")
+            ollama_cmd = ["ollama", "serve"]
+            ollama_health_url = f"http://localhost:{OLLAMA_PORT}"
+            self._spawn_server(ollama_cmd, ollama_health_url, "Ollama not found. Install via 'curl -fsSL https://ollama.com/install.sh | sh'") # noqa
 
 
 # ----------------------------------- Client ---------------------------------- #
@@ -327,7 +321,10 @@ class LLMClient:
                 for chunk in response:
                     content = chunk.choices[0].delta.content
                     if content:
-                        yield content
+                        try:
+                            yield content
+                        except GeneratorExit:
+                            return
 
         except Exception as e:
             if stream:
@@ -366,6 +363,7 @@ class LLMClient:
                     yield chunk
                 except GeneratorExit:
                     return
+
             self.messages.append({"role": "user", "content": user_msg})
             self.messages.append({"role": "assistant", "content": response})
 
