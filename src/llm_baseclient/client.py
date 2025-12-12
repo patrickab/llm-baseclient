@@ -135,7 +135,7 @@ class LLMClient:
         user_msg_history: Optional[List[Dict[str, str]]] = None,
         system_prompt: Optional[str] = None,
         img: Optional[Path | List[Path] | bytes | List[bytes]] = None,
-        stream: bool = True,
+        stream: bool = False,
         **kwargs: Dict[str, any]
     ) -> Iterator[str] | ChatCompletion:
         """
@@ -211,7 +211,7 @@ class LLMClient:
         user_msg: str,
         system_prompt: Optional[str] = "",
         img: Optional[Path | List[Path] | bytes | List[bytes]] = None,
-        stream: bool = True,
+        stream: bool = False,
         **kwargs: Dict[str, any]
     ) -> Iterator[str]|ChatCompletion:
         """
