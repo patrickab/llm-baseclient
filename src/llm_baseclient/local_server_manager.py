@@ -31,7 +31,7 @@ class _LocalServerManager:
         """Terminates any running local inference server."""
         if self._process:
             try:
-                logger("Stopping local inference server...")
+                logger.info("Stopping local inference server...")
                 self._process.terminate()
                 self._process.wait(timeout=5)
             except (subprocess.TimeoutExpired, Exception):
@@ -50,7 +50,7 @@ class _LocalServerManager:
                 if conn.laddr.port == port and conn.pid:
                     try:
                         proc = psutil.Process(conn.pid)
-                        logger(f"Freeing Port {port} (PID {proc.pid})...")
+                        logger.info(f"Freeing Port {port} (PID {proc.pid})...")
                         proc.terminate()
                         proc.wait(timeout=5)
                     except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.TimeoutExpired):
@@ -69,11 +69,11 @@ class _LocalServerManager:
     def _wait_for_server(self, url: str, timeout: int = 60) -> bool:
         """Health Check: Blocks until server returns 200 OK."""
         start_time = time.time()
-        logger(f"Waiting for local inference server at {url}...")
+        logger.info(f"Waiting for local inference server at {url}...")
         while time.time() - start_time < timeout:
             try:
                 requests.get(url, timeout=1.5)
-                logger(f"...inference server ready at {url}.")
+                logger.info(f"...inference server ready at {url}.")
                 return True
             except requests.ConnectionError:
                 time.sleep(2)
@@ -103,7 +103,7 @@ class _LocalServerManager:
         if self._get_running_vllm_model(VLLM_BASE_URL) == model_name:
             return
 
-        logger(f"Switching to vLLM ({model_name})...")
+        logger.info(f"Switching to vLLM ({model_name})...")
         self._kill_processes_on_ports(VLLM_PORT, OLLAMA_PORT)
 
         vllm_cmd = [
@@ -123,7 +123,7 @@ class _LocalServerManager:
             self._kill_processes_on_ports(VLLM_PORT)
             return
 
-        logger("Switching to Ollama...")
+        logger.info("Switching to Ollama...")
         self._kill_processes_on_ports(OLLAMA_PORT, VLLM_PORT)
         self._spawn_server(
             cmd=["ollama", "serve"],
