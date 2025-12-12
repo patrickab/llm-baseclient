@@ -251,7 +251,7 @@ class LLMClient:
         Handles routing for local inference servers (vLLM, Ollama) and commercial providers.
 
         Args:
-            model: The model identifier in 'provider/model_name' format (e.g., 'openai/text-embedding-ada-002').
+            model: Model identifier [LiteLLM Format](https://models.litellm.ai/) - e.g., 'openai/text-embedding-ada-002').
             input_text: The text or list of texts to embed.
             **model_kwargs: Additional keyword arguments passed directly to the LiteLLM `embedding` call.
 
@@ -285,7 +285,7 @@ class LLMClient:
         streaming and non-streaming responses, and various providers.
 
         Args:
-            model: The model identifier in 'provider/model_name' format (e.g., 'openai/gpt-4o').
+            model: Model identifier [LiteLLM Format](https://models.litellm.ai/) - e.g., 'openai/text-embedding-ada-002').
             user_msg: The current user message as a string.
             user_msg_history: A list of message dictionaries representing prior conversation turns.
                               Each dictionary should have 'role' and 'content' keys.
