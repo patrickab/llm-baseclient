@@ -1,4 +1,10 @@
-"""Swiss Army Knife LLM client."""
+"""
+Swiss Army Knife LLM client.
+
+Supports +2100 LLMs from +100 providers via LiteLLM.
+Supports hardware-aware GPU/CPU local inference (vLLM/Ollama).
+Supports multimodal inputs (images via paths, bytes, data URIs, URLs) - voice coming soon!
+"""
 
 import base64
 from pathlib import Path
