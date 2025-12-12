@@ -314,18 +314,13 @@ class LLMClient:
         if user_msg_history:
             messages.extend(user_msg_history)
 
-        if user_msg or img:
-            content_payload = []
-            if user_msg:
-                content_payload.append({"type": "text", "text": user_msg})
-            # img_data is already prepared and will be empty if img is None
-            content_payload.extend([
-                {"type": "image_url", "image_url": {"url": img_b64}}
-                for img_b64 in img_data
-            ])
-
-            # The final user message can be a simple string (if text-only) or a list of content parts (multimodal).
-            # LiteLLM automatically handles this structure.
+        if user_msg or img_data:
+            content_payload = (
+            [{"type": "text", "text": user_msg}] if user_msg else []
+            ) + [
+            {"type": "image_url", "image_url": {"url": img}}
+            for img in img_data
+            ]
             messages.append({"role": "user", "content": content_payload})
 
         # 2. Determine provider routing - custom_llm_provider defaults to none for commercial providers.
