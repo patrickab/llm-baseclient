@@ -12,6 +12,7 @@ Automatically spawns & manages servers for local inference backends (vLLM, Ollam
 import atexit
 import base64
 from pathlib import Path
+import shutil
 import socket
 import subprocess
 import time
@@ -59,48 +60,39 @@ class _LocalServerManager:
     def _kill_processes_on_ports(self, *ports: int) -> None:
         """Terminates any processes listening on the specified ports."""
         for port in ports:
-            found_and_killed = False
             for conn in psutil.net_connections(kind='inet'):
                 if conn.laddr.port == port and conn.pid:
                     try:
                         proc = psutil.Process(conn.pid)
-                        print(f"Port {port} occupied by PID {proc.pid} ({proc.name()}). Terminating...")
+                        print(f"Freeing Port {port} (PID {proc.pid})...")
                         proc.terminate()
                         proc.wait(timeout=5)
-                        found_and_killed = True
                     except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.TimeoutExpired):
-                        pass # Process already gone or couldn't terminate gracefully
-            if found_and_killed:
-                print(f"Port {port} is now free.")
-            else:
-                print(f"Port {port} was already free.")
+                        pass
 
+    def _prepare_port(self, target_port: int, conflict_ports: List[int]) -> None:
+        """Ensures target port is free and conflicting services are stopped."""
+        # If target is open (occupied), we assume it might be the wrong service, so we kill it.
+        # We also strictly kill conflicts to free GPU resources.
+        self._kill_processes_on_ports(target_port, *conflict_ports)
 
     def _get_running_vllm_model(self, base_url: str) -> Optional[str]:
-        """
-        Queries the vLLM /v1/models endpoint to check which model is loaded.
-        Returns the model ID string if running, or None if connection fails.
-        """
+        """Queries the vLLM /v1/models endpoint to check which model is loaded."""
         try:
-            # vLLM is OpenAI compatible, so it returns {"data": [{"id": "model_name", ...}]}
             resp = requests.get(f"{base_url}/v1/models", timeout=1)
-            if resp.status_code == 200 and (data := resp.json()).get("data") and data["data"]:
+            if resp.status_code == 200 and (data := resp.json()).get("data"):
                 return data["data"][0]["id"]
         except requests.RequestException:
             pass
         return None
 
     def _wait_for_server(self, url: str, timeout: int = 60) -> bool:
-        """
-        Health Check: Blocks until server returns 200 OK.
-        Bigger models may need longer startup times.
-        """
+        """Health Check: Blocks until server returns 200 OK."""
         start_time = time.time()
         print(f"Waiting for local inference server at {url}...")
         while time.time() - start_time < timeout:
             try:
-                # vLLM and Ollama usually have /health or /v1/models endpoints
-                requests.get(url, timeout=1)
+                requests.get(url, timeout=1.5)
                 print(f"...inference server ready at {url}.")
                 return True
             except requests.ConnectionError:
@@ -108,56 +100,49 @@ class _LocalServerManager:
         return False
 
     def _spawn_server(self, cmd: list[str], health_check_url: str, install_hint: str) -> None:
-        """
-        Spawns a server process, waits for it to become healthy, and handles startup errors.
-        """
+        """Spawns a server process, waits for health, and captures stderr on failure."""
+        if not shutil.which(cmd[0]):
+            raise RuntimeError(f"Command not found: {cmd[0]}. {install_hint}")
+
         try:
             self._process = subprocess.Popen(
                 cmd,
-                stdout=subprocess.DEVNULL,  # Suppress server stdout
-                stderr=subprocess.DEVNULL   # Suppress server stderr
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.PIPE # Capture stderr for debugging
             )
-        except FileNotFoundError:
-            raise RuntimeError(install_hint)
+        except Exception as e:
+            raise RuntimeError(f"Failed to spawn server: {e}")
 
         if not self._wait_for_server(health_check_url):
+            _, stderr = self._process.communicate()
             self.stop_server()
-            raise RuntimeError(f"Failed to start server at {health_check_url}.")
+            raise RuntimeError(f"Server failed to start. Logs:\n{stderr.decode('utf-8') if stderr else 'Unknown error'}")
 
     def ensure_vllm(self, model_name: str) -> None:
         """Ensures a vLLM server is running with the specified model."""
-        # Check if vLLM is already running the requested model
         if self._get_running_vllm_model(VLLM_BASE_URL) == model_name:
-            print(f"vLLM is already serving {model_name}. Connecting...")
             return
 
-        print(f"Switching to vLLM ({model_name}). Terminating processes on Ports {VLLM_PORT} and {OLLAMA_PORT} to free CPU/GPU...")
-        self._kill_processes_on_ports(VLLM_PORT, OLLAMA_PORT)
+        print(f"Switching to vLLM ({model_name})...")
+        self._prepare_port(VLLM_PORT, [OLLAMA_PORT])
 
-        print(f"Spawning vLLM server for {model_name}...")
         vllm_cmd = [
             "python", "-m", "vllm.entrypoints.openai.api_server",
             "--model", model_name, "--port", str(VLLM_PORT),
             "--trust-remote-code", "--gpu-memory-utilization", str(VLLM_GPU_UTIL)
         ]
-        vllm_health_url = f"http://localhost:{VLLM_PORT}/v1/models"
-        self._spawn_server(vllm_cmd, vllm_health_url, "vLLM is not installed. Install via:  pip install vllm")
+        self._spawn_server(vllm_cmd, f"http://localhost:{VLLM_PORT}/v1/models", "Install via: pip install vllm")
 
     def ensure_ollama(self) -> None:
         """Ensures an Ollama server is running."""
         if self._is_port_open(OLLAMA_PORT):
-            if self._is_port_open(VLLM_PORT):
-                print(f"vLLM running on port {VLLM_PORT}. Terminating vLLM to free CPU/GPU...")
-                self._kill_processes_on_ports(VLLM_PORT)
-            print(f"Ollama server already running on {OLLAMA_PORT}. Connecting...")
+            # If Ollama is running, just ensure vLLM is off
+            self._kill_processes_on_ports(VLLM_PORT)
             return
 
-        print(f"Ollama not running. Terminating processes on Ports {OLLAMA_PORT} and {VLLM_PORT} to free CPU/GPU...")
-        self._kill_processes_on_ports(OLLAMA_PORT, VLLM_PORT)
-
-        ollama_cmd = ["ollama", "serve"]
-        ollama_health_url = f"http://localhost:{OLLAMA_PORT}"
-        self._spawn_server(ollama_cmd, ollama_health_url, "Ollama not found. Install via 'curl -fsSL https://ollama.com/install.sh | sh'") # noqa
+        print("Switching to Ollama...")
+        self._prepare_port(OLLAMA_PORT, [VLLM_PORT])
+        self._spawn_server(["ollama", "serve"], f"http://localhost:{OLLAMA_PORT}", "Install via: https://ollama.com")
 
 # ----------------------------------- Client ---------------------------------- #
 
@@ -187,58 +172,45 @@ class LLMClient:
         self.server_manager = _LocalServerManager()
 
     # ----------------------------------- Data Wrangling ---------------------------------- #
-    def _detect_mime_type(self, data: bytes) -> str:
-        kind = filetype.guess(data)
-        if kind is None:
-            return "image/jpeg" # Fallback
-        return kind.mime
-
     def _process_image(self, img: Union[Path, bytes, str]) -> str:
-        """Standardizes image inputs (Path, bytes, or data‑URI) into a Base64 data URI."""
+        """Standardizes image inputs (Path, bytes, or data-URI) into a Base64 data URI or passes URL."""
 
-        if isinstance(img, str):
-            if img.startswith(("http://", "https://")):
-                return img # LiteLLM/OpenAI can download the image themselves.
+        if img.startswith(("http://", "https://", "data:image")):
+                # LiteLLM/OpenAI can download the image themselves.
+                # data:image implies already data URI format.
+                return img
 
-            if img.startswith("data:image"):
-                return img # already a data URI
-
-        # 1. Normalize inputs to raw bytes
+        # Normalize to bytes
         if isinstance(img, (Path, str)):
             path = Path(img)
             if not path.is_file():
                 raise FileNotFoundError(f"Image not found: {path}")
-            # Read bytes immediately so we can use filetype detection
             img = path.read_bytes()
 
-        # 2. Encode and format
-        mime_type = self._detect_mime_type(img)
+        # Detect mime and encode
+        kind = filetype.guess(img)
+        mime_type = kind.mime if kind else "image/jpeg"
         b64_encoded = base64.b64encode(img).decode("utf-8")
         return f"data:{mime_type};base64,{b64_encoded}"
 
     def _resolve_routing(self, model_input: str) -> Tuple[str, Optional[str], Optional[str]]:
         """Parses 'provider/model' and handles local server spawning."""
         if "/" not in model_input:
-            raise ValueError("Model must be in format 'provider/model_name' (e.g. 'openai/gpt-4' or 'ollama/llama3')")
+            raise ValueError("Model format must be 'provider/model_name'")
 
         provider, model_name = model_input.split("/", 1)
 
-        api_base = None
-        custom_llm_provider = None
-
         if provider == "hosted_vllm":
             self.server_manager.ensure_vllm(model_name)
-            api_base = f"http://localhost:{VLLM_PORT}/v1"
-            custom_llm_provider = "hosted_vllm"
+            return model_input, f"http://localhost:{VLLM_PORT}/v1", "hosted_vllm"
         elif provider == "ollama":
-            self.server_manager.ensure_ollama() # Ensure Ollama server is running
-            api_base = f"http://localhost:{OLLAMA_PORT}"
-            custom_llm_provider = "ollama"
+            self.server_manager.ensure_ollama()
+            return model_input, f"http://localhost:{OLLAMA_PORT}", "ollama"
 
         # For commercial providers (e.g., openai, anthropic), LiteLLM handles routing natively.
         # api_base and custom_llm_provider remain None, and the original model string is used.
 
-        return model_input, api_base, custom_llm_provider
+        return model_input, None, None
 
     # -------------------------------- Core LLM Interaction -------------------------------- #
     def get_embedding(
@@ -302,12 +274,12 @@ class LLMClient:
         Raises:
             Exception: If an error occurs during the API call.
         """
+
         img_data = []
         if img is not None:
             items = img if isinstance(img, (list, tuple)) else [img]
             img_data = [self._process_image(i) for i in items]
 
-        # 1. Prepare Messages
         messages = []
         if system_prompt:
             messages.append({"role": "system", "content": system_prompt})
@@ -315,18 +287,12 @@ class LLMClient:
             messages.extend(user_msg_history)
 
         if user_msg or img_data:
-            content_payload = (
-            [{"type": "text", "text": user_msg}] if user_msg else []
-            ) + [
-            {"type": "image_url", "image_url": {"url": img}}
-            for img in img_data
-            ]
+            content_payload = [{"type": "text", "text": user_msg}] if user_msg else []
+            content_payload.extend([{"type": "image_url", "image_url": {"url": i}} for i in img_data])
             messages.append({"role": "user", "content": content_payload})
 
-        # 2. Determine provider routing - custom_llm_provider defaults to none for commercial providers.
         final_model, api_base, custom_llm_provider = self._resolve_routing(model)
 
-        # 3. Execute request via LiteLLM
         try:
             response = completion(
                 model=final_model,
