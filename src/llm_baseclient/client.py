@@ -73,12 +73,6 @@ class _LocalServerManager:
                     except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.TimeoutExpired):
                         pass
 
-    def _prepare_port(self, target_port: int, conflict_ports: List[int]) -> None:
-        """Ensures target port is free and conflicting services are stopped."""
-        # If target is open (occupied), we assume it might be the wrong service, so we kill it.
-        # We also strictly kill conflicts to free GPU resources.
-        self._kill_processes_on_ports(target_port, *conflict_ports)
-
     def _get_running_vllm_model(self, base_url: str) -> Optional[str]:
         """Queries the vLLM /v1/models endpoint to check which model is loaded."""
         try:
@@ -161,13 +155,25 @@ class LLMClient:
        - Open source: vLLM / Ollama / Huggingface with local CPU/GPU inference.
        - Commercial: OpenAI, Gemini, Anthropic, etc - any provider supported by LiteLLM.
 
+    Automatically manages local inference servers for vLLM and Ollama,
+    allowing dynamic switching between backends/models during runtime.
+
+    Assumes:
+        For Commercial Providers:
+            - API keys in environment.
+        For vLLM / Ollama:
+            - Local provider software installed.
+            - Local models already downloaded.
+
     Supports:
         - stateless & stateful interactions
         - streaming & non-streaming responses
         - text-only & multimodal inputs
         - images provided as
-            (1) file paths or
+            (1) file paths
             (2) raw bytes
+            (3) base64 data URIs
+            (4) web URLs
     """
 
     def __init__(self) -> None:
