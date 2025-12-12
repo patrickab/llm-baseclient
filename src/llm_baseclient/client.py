@@ -176,14 +176,18 @@ class LLMClient:
     """
 
     def __init__(self) -> None:
-
-        self.messages: List[Tuple[str, str]] = [] # [role, message] - only store text for efficiency
-        self.sys_prompt = ""
+        """
+        Initializes the LLMClient with an empty message history, an empty system prompt,
+        and a LocalServerManager for handling local inference servers.
+        """
+        # Stores conversation history as a list of (role, message) tuples.
+        # Only text content is stored for efficiency; multimodal inputs are processed on-the-fly.
+        self.messages: List[Dict[str, str]] = []
         self.server_manager = LocalServerManager()
 
     # ----------------------------------- Data Wrangling ---------------------------------- #
     def _process_image(self, img: Union[Path, bytes, str]) -> str:
-        """Standardizes image input to Base64 string."""
+        """Standardizes various image inputs (Path, bytes, data URI string) into a Base64 data URI string."""
         if isinstance(img, str) and img.startswith("data:image"):
             return img # Already base64
 
@@ -194,7 +198,7 @@ class LLMClient:
             with open(path, "rb") as img_file:
                 data = img_file.read()
                 mime_type = f"image/{path.suffix[1:].lower()}"
-                if mime_type == "image/jpg": mime_type = "image/jpeg"
+                if mime_type == "image/jpg": mime_type = "image/jpeg" # Standardize JPEG mime type
 
         elif isinstance(img, bytes):
             data = img
@@ -202,7 +206,7 @@ class LLMClient:
             elif data.startswith(b'\x89PNG'): mime_type = "image/png"
             elif data.startswith(b'GIF8'): mime_type = "image/gif"
             elif data.startswith(b'RIFF'): mime_type = "image/webp"
-            else: mime_type = "image/jpeg" # Default fallback
+            else: mime_type = "image/jpeg" # Default to JPEG if magic bytes are unknown
 
         else:
             raise ValueError("Unsupported image type")
@@ -211,10 +215,7 @@ class LLMClient:
         return f"data:{mime_type};base64,{encoded_string}"
 
     def _resolve_routing(self, model_input: str) -> Tuple[str, Optional[str], Optional[str]]:
-        """
-        Parses 'provider/model' and handles local server spawning.
-        Returns: (litellm_model_string, api_base, custom_llm_provider)
-        """
+        """Parses 'provider/model' and handles local server spawning."""
         if "/" not in model_input:
             raise ValueError("Model must be in format 'provider/model_name' (e.g. 'openai/gpt-4' or 'ollama/llama3')")
 
@@ -228,12 +229,12 @@ class LLMClient:
             api_base = f"http://localhost:{VLLM_PORT}/v1"
             custom_llm_provider = "hosted_vllm"
         elif provider == "ollama":
-            self.server_manager.ensure_ollama()
+            self.server_manager.ensure_ollama() # Ensure Ollama server is running
             api_base = f"http://localhost:{OLLAMA_PORT}"
             custom_llm_provider = "ollama"
 
-        # If provider is commercial (openai, anthropic, etc), LiteLLM handles it natively.
-        # We just pass the original string (e.g., "anthropic/claude-3-opus")
+        # For commercial providers (e.g., openai, anthropic), LiteLLM handles routing natively.
+        # api_base and custom_llm_provider remain None, and the original model string is used.
 
         return model_input, api_base, custom_llm_provider
 
@@ -242,31 +243,63 @@ class LLMClient:
         self, model: str,
         input_text: Union[str, List[str]],
         **model_kwargs: Dict[str, any]
-    ) -> EmbeddingResponse:
+    ) -> EmbeddingResponse: # type: ignore
+        """
+        Generates embeddings for the given input text using the specified model.
+        Handles routing for local inference servers (vLLM, Ollama) and commercial providers.
 
-        # Resolve routing (for local inference: starts server)
+        Args:
+            model: The model identifier in 'provider/model_name' format (e.g., 'openai/text-embedding-ada-002').
+            input_text: The text or list of texts to embed.
+            **model_kwargs: Additional keyword arguments passed directly to the LiteLLM `embedding` call.
+
+        Returns:
+            An EmbeddingResponse object containing the generated embeddings.
+        """
         final_model, api_base, custom_llm_provider = self._resolve_routing(model)
+        # For custom local providers, model_kwargs need to be nested under 'extra_body'.
         model_kwargs = {"extra_body": model_kwargs} if custom_llm_provider else model_kwargs
 
         response = embedding(
             model=final_model,
             input=input_text,
             api_base=api_base,
-            custom_llm_provider=custom_llm_provider, # defaults to None for commercial providers
+            custom_llm_provider=custom_llm_provider,
             **model_kwargs
         )
         return response
 
     def api_query(self,
-        model: str,
+        model: str, # type: ignore
         user_msg: Optional[str] = None,
-        user_msg_history: Optional[List[Tuple[str, str]]] = None,
+        user_msg_history: Optional[List[Dict[str, str]]] = None,
         system_prompt: Optional[str] = None,
         img: Optional[Path | List[Path] | bytes | List[bytes]] = None,
         stream: bool = True,
         **kwargs: Dict[str, any]
     ) -> Iterator[str] | ChatCompletion:
+        """
+        Executes a raw API query to an LLM, supporting text-only and multimodal inputs,
+        streaming and non-streaming responses, and various providers.
 
+        Args:
+            model: The model identifier in 'provider/model_name' format (e.g., 'openai/gpt-4o').
+            user_msg: The current user message as a string.
+            user_msg_history: A list of message dictionaries representing prior conversation turns.
+                              Each dictionary should have 'role' and 'content' keys.
+            system_prompt: An optional system-level instruction for the model.
+            img: Optional image input(s) as file paths, raw bytes, or a list of these.
+            stream: If True, returns an iterator yielding chunks of the response.
+                    If False, returns a complete ChatCompletion object.
+            **kwargs: Additional keyword arguments passed directly to the LiteLLM `completion` call
+                      (e.g., `temperature`, `top_p`, `max_tokens`).
+
+        Returns:
+            An iterator of strings if `stream` is True, or a ChatCompletion object if `stream` is False.
+
+        Raises:
+            Exception: If an error occurs during the API call.
+        """
         img_data = []
         if img is not None:
             items = img if isinstance(img, (list, tuple)) else [img]
@@ -277,26 +310,26 @@ class LLMClient:
         if system_prompt:
             messages.append({"role": "system", "content": system_prompt})
         if user_msg_history:
+            # Append historical messages from the conversation.
             for msg in user_msg_history:
                 messages.append({"role": msg["role"], "content": msg["content"]})
 
         if user_msg or img:
             content_payload = []
             if user_msg is not None:
-                # Text-only Format: Simple string
+                # For text-only parts of a message.
                 content_payload.append({"type": "text", "text": user_msg})
             if img is not None:
-                # Multimodal Format: List of dictionaries
+                # For image parts of a multimodal message.
                 for img_b64 in img_data:
                     content_payload.append({"type": "image_url", "image_url": {"url":img_b64}})
 
+            # The final user message can be a simple string (if text-only) or a list of content parts (multimodal).
+            # LiteLLM automatically handles this structure.
             messages.append({"role": "user", "content": content_payload})
 
-        # 2. Resolve Routing (for local inference: starts server)
-        start_time = time.time()
+        # 2. Determine provider routing - custom_llm_provider defaults to none for commercial providers.
         final_model, api_base, custom_llm_provider = self._resolve_routing(model)
-        elapsed = time.time() - start_time
-        print(f"Model routing resolved in {elapsed:.2f} seconds. Using model: {final_model}")
 
         # 3. Execute request via LiteLLM
         try:
@@ -305,14 +338,15 @@ class LLMClient:
                 messages=messages,
                 stream=stream,
                 api_base=api_base,
-                custom_llm_provider=custom_llm_provider, # defaults to None for commercial providers
-                **kwargs # Pass temperature, top_p, etc. - supports model-specific params
+                custom_llm_provider=custom_llm_provider, # Defaults to None for commercial providers.
+                **kwargs # Passes additional model parameters like temperature, top_p, max_tokens.
             )
 
             if stream is False:
                 return response
             else:
                 for chunk in response:
+                    # Extract content from streaming chunks.
                     content = chunk.choices[0].delta.content
                     if content:
                         try:
@@ -333,23 +367,39 @@ class LLMClient:
         stream: bool = True,
         **kwargs: Dict[str, any]
     ) -> Iterator[str]|ChatCompletion:
-        """Stateful Chat Wrapper around api_query to maintain conversation history."""
+        """
+        Stateful chat wrapper around `api_query` to maintain and update conversation history.
 
+        Args:
+            model: The model identifier in 'provider/model_name' format.
+            user_msg: The current user message.
+            system_prompt: An optional system-level instruction for the model.
+            img: Optional image input(s) for multimodal messages.
+            stream: If True, streams the response. If False, returns the complete response.
+            **kwargs: Additional keyword arguments passed to `api_query`.
+
+        Returns:
+            An iterator of strings if `stream` is True, or a ChatCompletion object if `stream` is False.
+        """
         api_response = self.api_query(
             model=model,
             user_msg=user_msg,
             user_msg_history=self.messages,
             system_prompt=system_prompt,
             img=img,
+            stream=stream,
             **kwargs)
 
         if stream is False:
             response = api_response
-            self.messages.append({"role": "user", "content": user_msg})
+            # Update history for non-streaming responses.
+            self.messages.append({"role": "user", "content": user_msg}) # Store user message
             self.messages.append({"role": "assistant", "content": response.choices[0].message.content})
             return response
 
         else:
+            # For streaming responses, accumulate chunks to form the full response
+            # before updating the history.
             response = ""
             for chunk in api_response:
                 response += chunk
@@ -358,7 +408,8 @@ class LLMClient:
                 except GeneratorExit:
                     return
 
-            self.messages.append({"role": "user", "content": user_msg})
+            # Update history for streaming responses after the full response is received.
+            self.messages.append({"role": "user", "content": user_msg}) # Store user message
             self.messages.append({"role": "assistant", "content": response})
 
     # ----------------------------------- Cleanup ---------------------------------- #
