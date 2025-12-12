@@ -14,7 +14,6 @@ import base64
 from pathlib import Path
 import socket
 import subprocess
-import sys
 import time
 from typing import Dict, Iterator, List, Optional, Tuple, Union
 
@@ -48,7 +47,7 @@ class LocalServerManager:
             try:
                 self._process.wait(timeout=5)
             except Exception:
-                self._process.kill()
+                self._process.kill()  # Force kill if graceful termination times out
             self._process = None
 
     def _is_port_open(self, port: int) -> bool:
@@ -60,6 +59,7 @@ class LocalServerManager:
         """Terminates any processes listening on the specified ports."""
         for port in ports:
             for proc in psutil.process_iter(['pid', 'name']):
+                # Iterate through all running processes to find and terminate those listening on the specified port.
                 try:
                     for conn in proc.net_connections(kind='inet'):
                         if conn.laddr.port == port:
@@ -68,8 +68,9 @@ class LocalServerManager:
                             try:
                                 proc.wait(timeout=5)
                             except psutil.TimeoutExpired:
-                                proc.kill()
+                                proc.kill()  # Force kill if graceful termination times out
                 except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+                    # Handle transient process states during iteration
                     continue
             print(f"Port {port} is free.")
 
@@ -114,8 +115,8 @@ class LocalServerManager:
         try:
             self._process = subprocess.Popen(
                 cmd,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL
+                stdout=subprocess.DEVNULL,  # Suppress server stdout
+                stderr=subprocess.DEVNULL   # Suppress server stderr
             )
         except FileNotFoundError:
             raise RuntimeError(install_hint)
@@ -125,6 +126,7 @@ class LocalServerManager:
             raise RuntimeError(f"Failed to start server at {health_check_url}.")
 
     def ensure_vllm(self, model_name: str) -> None:
+        """Ensures a vLLM server is running with the specified model."""
         # Check if vLLM is already running the requested model
         if self._get_running_vllm_model(VLLM_BASE_URL) == model_name:
             print(f"vLLM is already serving {model_name}. Connecting...")
@@ -135,7 +137,7 @@ class LocalServerManager:
 
         print(f"Spawning vLLM server for {model_name}...")
         vllm_cmd = [
-            sys.executable, "-m", "vllm.entrypoints.openai.api_server",
+            "python", "-m", "vllm.entrypoints.openai.api_server",
             "--model", model_name, "--port", str(VLLM_PORT),
             "--trust-remote-code", "--gpu-memory-utilization", str(VLLM_GPU_UTIL)
         ]
@@ -143,6 +145,7 @@ class LocalServerManager:
         self._spawn_server(vllm_cmd, vllm_health_url, "vLLM is not installed. Install via:  pip install vllm")
 
     def ensure_ollama(self) -> None:
+        """Ensures an Ollama server is running."""
         # 1. Check ports
         ollama_open = self._is_port_open(OLLAMA_PORT)
         vllm_open = self._is_port_open(VLLM_PORT)
@@ -162,7 +165,6 @@ class LocalServerManager:
             ollama_cmd = ["ollama", "serve"]
             ollama_health_url = f"http://localhost:{OLLAMA_PORT}"
             self._spawn_server(ollama_cmd, ollama_health_url, "Ollama not found. Install via 'curl -fsSL https://ollama.com/install.sh | sh'") # noqa
-
 
 # ----------------------------------- Client ---------------------------------- #
 
