@@ -130,7 +130,7 @@ class LLMClient:
         return response
 
     def api_query(self,
-        model: str, # type: ignore
+        model: str,
         user_msg: Optional[str] = None,
         user_msg_history: Optional[List[Dict[str, str]]] = None,
         system_prompt: Optional[str] = None,
@@ -178,7 +178,6 @@ class LLMClient:
             messages.append({"role": "user", "content": content_payload})
 
         final_model, api_base, custom_llm_provider = self._resolve_routing(model)
-
         try:
             response = completion(
                 model=final_model,
@@ -188,30 +187,32 @@ class LLMClient:
                 custom_llm_provider=custom_llm_provider, # Defaults to None for commercial providers.
                 **kwargs # Passes additional model parameters like temperature, top_p, max_tokens.
             )
-
             if stream is False:
                 return response
             else:
-                for chunk in response:
-                    # Extract content from streaming chunks.
-                    content = chunk.choices[0].delta.content
-                    if content:
-                        try:
-                            yield content
-                        except GeneratorExit:
-                            return
+                def stream_generator() -> Iterator[str]:
+                    """
+                    Generator wrapper to isolate `yield` keyword from outer function scope.
+                    Allows the outer function to conditionally return `Iterator[Str] | ChatCompletion`
+                    """
+                    for chunk in response:
+                        # Extract content from streaming chunks.
+                        content = chunk.choices[0].delta.content
+                        if content:
+                            try:
+                                yield content
+                            except GeneratorExit:
+                                return
+                return stream_generator()
 
         except Exception as e:
-            if stream:
-                yield f"API Error: {e!s}"
             raise e
-
 
     def chat(self, model: str,
         user_msg: str,
         system_prompt: Optional[str] = "",
         img: Optional[Path | List[Path] | bytes | List[bytes]] = None,
-        stream: bool = False,
+        stream: bool = True,
         **kwargs: Dict[str, any]
     ) -> Iterator[str]|ChatCompletion:
         """
