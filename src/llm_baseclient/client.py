@@ -197,8 +197,9 @@ class LLMClient:
                 raise FileNotFoundError(f"Image not found: {path}")
             with open(path, "rb") as img_file:
                 data = img_file.read()
-                mime_type = f"image/{path.suffix[1:].lower()}"
-                if mime_type == "image/jpg": mime_type = "image/jpeg" # Standardize JPEG mime type
+            # More concise MIME type determination
+            suffix = path.suffix[1:].lower()
+            mime_type = "image/jpeg" if suffix == "jpg" else f"image/{suffix}"
 
         elif isinstance(img, bytes):
             data = img
@@ -211,8 +212,7 @@ class LLMClient:
         else:
             raise ValueError("Unsupported image type")
 
-        encoded_string = base64.b64encode(data).decode('utf-8')
-        return f"data:{mime_type};base64,{encoded_string}"
+        return f"data:{mime_type};base64,{base64.b64encode(data).decode('utf-8')}"
 
     def _resolve_routing(self, model_input: str) -> Tuple[str, Optional[str], Optional[str]]:
         """Parses 'provider/model' and handles local server spawning."""
@@ -310,19 +310,17 @@ class LLMClient:
         if system_prompt:
             messages.append({"role": "system", "content": system_prompt})
         if user_msg_history:
-            # Append historical messages from the conversation.
-            for msg in user_msg_history:
-                messages.append({"role": msg["role"], "content": msg["content"]})
+            messages.extend(user_msg_history)
 
         if user_msg or img:
             content_payload = []
-            if user_msg is not None:
-                # For text-only parts of a message.
+            if user_msg:
                 content_payload.append({"type": "text", "text": user_msg})
-            if img is not None:
-                # For image parts of a multimodal message.
-                for img_b64 in img_data:
-                    content_payload.append({"type": "image_url", "image_url": {"url":img_b64}})
+            # img_data is already prepared and will be empty if img is None
+            content_payload.extend([
+                {"type": "image_url", "image_url": {"url": img_b64}}
+                for img_b64 in img_data
+            ])
 
             # The final user message can be a simple string (if text-only) or a list of content parts (multimodal).
             # LiteLLM automatically handles this structure.
