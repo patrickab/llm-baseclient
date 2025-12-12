@@ -362,7 +362,10 @@ class LLMClient:
             response = ""
             for chunk in api_response:
                 response += chunk
-                yield chunk
+                try:
+                    yield chunk
+                except GeneratorExit:
+                    return
             self.messages.append({"role": "user", "content": user_msg})
             self.messages.append({"role": "assistant", "content": response})
 
