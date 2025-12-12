@@ -42,12 +42,12 @@ class LocalServerManager:
     def stop_server(self) -> None:
         """Terminates any running local inference server."""
         if self._process:
-            print("Stopping local inference server...")
-            self._process.terminate()
             try:
+                print("Stopping local inference server...")
+                self._process.terminate()
                 self._process.wait(timeout=5)
-            except Exception:
-                self._process.kill()  # Force kill if graceful termination times out
+            except (subprocess.TimeoutExpired, Exception):
+                self._process.kill()
             self._process = None
 
     def _is_port_open(self, port: int) -> bool:
@@ -58,21 +58,21 @@ class LocalServerManager:
     def _kill_processes_on_ports(self, *ports: int) -> None:
         """Terminates any processes listening on the specified ports."""
         for port in ports:
-            for proc in psutil.process_iter(['pid', 'name']):
-                # Iterate through all running processes to find and terminate those listening on the specified port.
-                try:
-                    for conn in proc.net_connections(kind='inet'):
-                        if conn.laddr.port == port:
-                            print(f"Port {port} occupied by PID {proc.info['pid']} ({proc.info['name']}). Terminating...")
-                            proc.terminate()
-                            try:
-                                proc.wait(timeout=5)
-                            except psutil.TimeoutExpired:
-                                proc.kill()  # Force kill if graceful termination times out
-                except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
-                    # Handle transient process states during iteration
-                    continue
-            print(f"Port {port} is free.")
+            found_and_killed = False
+            for conn in psutil.net_connections(kind='inet'):
+                if conn.laddr.port == port and conn.pid:
+                    try:
+                        proc = psutil.Process(conn.pid)
+                        print(f"Port {port} occupied by PID {proc.pid} ({proc.name()}). Terminating...")
+                        proc.terminate()
+                        proc.wait(timeout=5)
+                        found_and_killed = True
+                    except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.TimeoutExpired):
+                        pass # Process already gone or couldn't terminate gracefully
+            if found_and_killed:
+                print(f"Port {port} is now free.")
+            else:
+                print(f"Port {port} was already free.")
 
 
     def _get_running_vllm_model(self, base_url: str) -> Optional[str]:
@@ -83,10 +83,8 @@ class LocalServerManager:
         try:
             # vLLM is OpenAI compatible, so it returns {"data": [{"id": "model_name", ...}]}
             resp = requests.get(f"{base_url}/v1/models", timeout=1)
-            if resp.status_code == 200:
-                data = resp.json()
-                if "data" in data and len(data["data"]) > 0:
-                    return data["data"][0]["id"]
+            if resp.status_code == 200 and (data := resp.json()).get("data") and data["data"]:
+                return data["data"][0]["id"]
         except requests.RequestException:
             pass
         return None
@@ -102,7 +100,7 @@ class LocalServerManager:
             try:
                 # vLLM and Ollama usually have /health or /v1/models endpoints
                 requests.get(url, timeout=1)
-                print(f"...inference server spawned at {url}.")
+                print(f"...inference server ready at {url}.")
                 return True
             except requests.ConnectionError:
                 time.sleep(2)
@@ -146,25 +144,19 @@ class LocalServerManager:
 
     def ensure_ollama(self) -> None:
         """Ensures an Ollama server is running."""
-        # 1. Check ports
-        ollama_open = self._is_port_open(OLLAMA_PORT)
-        vllm_open = self._is_port_open(VLLM_PORT)
-
-        # 2. Fast Path
-        if ollama_open:
-            if vllm_open:
+        if self._is_port_open(OLLAMA_PORT):
+            if self._is_port_open(VLLM_PORT):
+                print(f"vLLM running on port {VLLM_PORT}. Terminating vLLM to free CPU/GPU...")
                 self._kill_processes_on_ports(VLLM_PORT)
+            print(f"Ollama server already running on {OLLAMA_PORT}. Connecting...")
             return
 
-        # 3. Startup: If Ollama wasn't open, start it.
-        if not ollama_open:
-            # Potential zombie process cleanup
-            self._kill_processes_on_ports(OLLAMA_PORT)
+        print(f"Ollama not running. Terminating processes on Ports {OLLAMA_PORT} and {VLLM_PORT} to free CPU/GPU...")
+        self._kill_processes_on_ports(OLLAMA_PORT, VLLM_PORT)
 
-            print("Spawning Ollama server process...")
-            ollama_cmd = ["ollama", "serve"]
-            ollama_health_url = f"http://localhost:{OLLAMA_PORT}"
-            self._spawn_server(ollama_cmd, ollama_health_url, "Ollama not found. Install via 'curl -fsSL https://ollama.com/install.sh | sh'") # noqa
+        ollama_cmd = ["ollama", "serve"]
+        ollama_health_url = f"http://localhost:{OLLAMA_PORT}"
+        self._spawn_server(ollama_cmd, ollama_health_url, "Ollama not found. Install via 'curl -fsSL https://ollama.com/install.sh | sh'") # noqa
 
 # ----------------------------------- Client ---------------------------------- #
 
