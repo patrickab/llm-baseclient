@@ -127,14 +127,17 @@ class _LocalServerManager:
             return
 
         logger(f"Switching to vLLM ({model_name})...")
-        self._prepare_port(VLLM_PORT, [OLLAMA_PORT])
+        self._kill_processes_on_ports(VLLM_PORT, OLLAMA_PORT)
 
         vllm_cmd = [
             "python", "-m", "vllm.entrypoints.openai.api_server",
             "--model", model_name, "--port", str(VLLM_PORT),
             "--trust-remote-code", "--gpu-memory-utilization", str(VLLM_GPU_UTIL)
         ]
-        self._spawn_server(vllm_cmd, f"http://localhost:{VLLM_PORT}/v1/models", "Install via: pip install vllm")
+        self._spawn_server(
+            cmd=vllm_cmd,
+            health_check_url=f"http://localhost:{VLLM_PORT}/v1/models",
+            install_hint="Install via: pip install vllm")
 
     def ensure_ollama(self) -> None:
         """Ensures an Ollama server is running."""
@@ -144,8 +147,11 @@ class _LocalServerManager:
             return
 
         logger("Switching to Ollama...")
-        self._prepare_port(OLLAMA_PORT, [VLLM_PORT])
-        self._spawn_server(["ollama", "serve"], f"http://localhost:{OLLAMA_PORT}", "Install via: https://ollama.com")
+        self._kill_processes_on_ports(OLLAMA_PORT, VLLM_PORT)
+        self._spawn_server(
+            cmd=["ollama", "serve"],
+            health_check_url=f"http://localhost:{OLLAMA_PORT}",
+            install_hint="Install via: https://ollama.com")
 
 # ----------------------------------- Client ---------------------------------- #
 
