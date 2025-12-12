@@ -15,6 +15,7 @@ from pathlib import Path
 import socket
 import subprocess
 import time
+import filetype
 from typing import Dict, Iterator, List, Optional, Tuple, Union
 
 from litellm import completion, embedding
@@ -186,33 +187,34 @@ class LLMClient:
         self.server_manager = _LocalServerManager()
 
     # ----------------------------------- Data Wrangling ---------------------------------- #
-    def _process_image(self, img: Union[Path, bytes, str]) -> str:
-        """Standardizes various image inputs (Path, bytes, data URI string) into a Base64 data URI string."""
-        if isinstance(img, str) and img.startswith("data:image"):
-            return img # Already base64
+    def _detect_mime_type(self, data: bytes) -> str:
+        kind = filetype.guess(data)
+        if kind is None:
+            return "image/jpeg" # Fallback
+        return kind.mime
 
+    def _process_image(self, img: Union[Path, bytes, str]) -> str:
+        """Standardizes image inputs (Path, bytes, or data‑URI) into a Base64 data URI."""
+
+        if isinstance(img, str):
+            if img.startswith(("http://", "https://")):
+                return img # LiteLLM/OpenAI can download the image themselves.
+
+            if img.startswith("data:image"):
+                return img # already a data URI
+
+        # 1. Normalize inputs to raw bytes
         if isinstance(img, (Path, str)):
             path = Path(img)
-            if not path.exists():
+            if not path.is_file():
                 raise FileNotFoundError(f"Image not found: {path}")
-            with open(path, "rb") as img_file:
-                data = img_file.read()
-            # More concise MIME type determination
-            suffix = path.suffix[1:].lower()
-            mime_type = "image/jpeg" if suffix == "jpg" else f"image/{suffix}"
+            # Read bytes immediately so we can use filetype detection
+            img = path.read_bytes()
 
-        elif isinstance(img, bytes):
-            data = img
-            if data.startswith(b'\xff\xd8'): mime_type = "image/jpeg"
-            elif data.startswith(b'\x89PNG'): mime_type = "image/png"
-            elif data.startswith(b'GIF8'): mime_type = "image/gif"
-            elif data.startswith(b'RIFF'): mime_type = "image/webp"
-            else: mime_type = "image/jpeg" # Default to JPEG if magic bytes are unknown
-
-        else:
-            raise ValueError("Unsupported image type")
-
-        return f"data:{mime_type};base64,{base64.b64encode(data).decode('utf-8')}"
+        # 2. Encode and format
+        mime_type = self._detect_mime_type(img)
+        b64_encoded = base64.b64encode(img).decode("utf-8")
+        return f"data:{mime_type};base64,{b64_encoded}"
 
     def _resolve_routing(self, model_input: str) -> Tuple[str, Optional[str], Optional[str]]:
         """Parses 'provider/model' and handles local server spawning."""

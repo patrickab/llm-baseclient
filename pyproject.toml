@@ -3,6 +3,7 @@ name = "llm-baseclient"
 version = "0.1.0"
 requires-python = ">=3.12"
 dependencies = [
+    "filetype>=1.2.0",
     "litellm>=1.80.5",
     "psutil>=7.1.3",
     "streamlit-paste-button>=0.1.2",
