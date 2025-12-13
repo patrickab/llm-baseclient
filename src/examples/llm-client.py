@@ -18,34 +18,40 @@ def main() -> None:
     # vision_model = "ollama/ministral-3:3b"
 
     """Stateless API call (non-streaming)"""
+    logger.info("--- Stateless API call (non-streaming) ---")
+
     # ------------------- Commercial Providers ------------------- #
     # Assumes API keys set in environment variables using provider conventions.
     response = client.api_query(model="openai/gpt-5.2", user_msg="Hello, world!")
+    logger.info(f"OpenAI Response: {response.choices[0].message.content}")
+
     response = client.api_query(model="gemini/gemini-2.5-flash", user_msg="Hello, world!")
+    logger.info(f"Gemini Response: {response.choices[0].message.content}")
 
     # --------------- Open-Source / Local Providers -------------- #
     # Assumes vLLM is installed - automatically downloads model if not present.
     response = client.api_query(model="hosted_vllm/Qwen/Qwen3-0.6B", user_msg="Hello, world!")
+    logger.info(f"Qwen Response: {response.choices[0].message.content}")
+
     # Assumes Ollama is installed - automatically downloads model if not present.
     response = client.api_query(model="ollama/gemma3:4b", user_msg="Hello, world!")
-
-    # -------------------- Responses Handling -------------------- #
-    # Responses are ChatCompletion objects
-    response = response.choices[0].message.content
-    logger.info("Stateless Response:\n" + response)
+    logger.info(f"Gemma Response: {response.choices[0].message.content}")
 
     """Stateless API call (streaming)"""
+    logger.info("--- Stateless API call (streaming) ---")
     # Assumes Ollama is installed - assumes model is already downloaded.
     stream = client.api_query(model="ollama/gemma3:4b", user_msg="Tell me a joke!", stream=True)
     response = ""
-    logger.info("Streaming response:")
+    logger.info("Streaming response (visual output to stdout):")
     for chunk in stream:
         print(chunk, end="", flush=True)
         response += chunk
 
     print("\n\n")
+    logger.info(f"Full Streamed Response: {response}")
 
     """Stateful chat interactions"""
+    logger.info("--- Stateful chat interactions ---")
     response = client.chat(model="ollama/gemma3:4b", user_msg="Tell me a knock knock joke.", stream=False)
     response = client.chat(model="ollama/gemma3:4b", user_msg="Who's there?", stream=False)
     logger.info("Message History:\n\n" + str(client.messages))
@@ -56,6 +62,7 @@ def main() -> None:
     Supports images as web URLs, local file paths, raw bytes or byte strings.
     Supports multiple images as list.
     """
+    logger.info("--- Image input examples ---")
 
     def print_stream(stream) -> None:  # noqa
         print("\nImage Input Response:")
@@ -113,6 +120,7 @@ def main() -> None:
         - You can therefore use reasoning_effort for Gemini Models, although the Gemini docs require different syntax.
         - Provider- or model-specific parameters can also be passed via `extra_body` dict in kwargs.
     """
+    logger.info("--- Advanced Configuration ---")
     logger.info("Advanced Configuration: JSON Output & Temperature")
     kwargs = {
         "max_tokens": 100,
@@ -140,6 +148,7 @@ def main() -> None:
     Simple RAG Retrieval Example
         - for client-compatible RAG database refer to  https://github.com/patrickab/rag-database
     """
+    logger.info("--- Embeddings Generation ---")
     logger.info("Generating Embeddings for RAG Retrieval")
 
     embedding_model = "ollama/embeddinggemma:300m"
@@ -175,6 +184,7 @@ def main() -> None:
         - maximizes throughput
         - Does not reduce API costs for commercial providers
     """
+    logger.info("--- Multimodal Batch Processing ---")
     logger.info("Running Batch Multimodal Analysis")
 
     img_nature = "https://upload.wikimedia.org/wikipedia/commons/thumb/d/dd/Gfp-wisconsin-madison-the-nature-boardwalk.jpg/2560px-Gfp-wisconsin-madison-the-nature-boardwalk.jpg"
@@ -200,9 +210,9 @@ def main() -> None:
     # Process results
     for i, result in enumerate(batch_results):
         if isinstance(result, Exception):
-            logger.error(f"\n\nRequest {i} failed: {result}")
+            logger.error(f"Request {i} failed: {result}")
         else:
-            logger.info(f"\n\nResult {i}: {result.choices[0].message.content.strip()}")
+            logger.info(f"Result {i}: {result.choices[0].message.content.strip()}")
 
     """
     Optimizations for high-performance local inference with limited VRAM.
@@ -221,17 +231,21 @@ def main() -> None:
     logger.info("Processing with custom vLLM command...")
     quantized_model = "cyankiwi/Ministral-3-14B-Instruct-2512-AWQ-4bit"
     os.environ["PYTORCH_ALLOC_CONF"] = "expandable_segments:True"
+
     # Max VRAM utilization (0.95 leaves some overhead for system & other apps)
     gpu_mem_util = 0.95
+
     # Higher throughput (tokens per second) but more VRAM usage
     # Defines number of simultaneous forward passes
     max_parallel_requests = 8
+
     # Restrict max tokens to allow parallelism within VRAM limits
     # Default: vLLM uses maximum model context length & upon startup
     #          allocates theoretical maximum of max_tokens*max_requests
     # input + output tokens = max_tokens
     # large amount of tokens is needed for images
     max_tokens = 1024
+
     # approximate tokens for image input
     img_max_tokens = 512
 
@@ -271,7 +285,7 @@ def main() -> None:
 
         # 1. Download Image with User-Agent header to avoid 403 Forbidden
         headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" # noqa
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"  # noqa
         }
 
         response = requests.get(image_url, headers=headers, stream=True)
@@ -337,18 +351,20 @@ def main() -> None:
         max_workers=max_parallel_requests,
     )
     logger.info("Processing complete. Results:")
-    logger.info("--- Optimization Results ---")
-    logger.info(f"Original Size:   {dict_img_nature_optimized['original_size']} px")
-    logger.info(f"Original Cost:   ~{dict_img_nature_optimized['original_tokens']} tokens")
-    logger.info("-" * 30)
-    logger.info(f"Target Cost:     ~{img_max_tokens} tokens")
-    logger.info(f"Optimized Size:  {dict_img_nature_optimized['optimized_size']} px (Multiple of 14? Yes)")
-    print(f"Optimized Cost:  ~{dict_img_nature_optimized['optimized_tokens']} tokens\n\n")
+    logger.info(
+        f"--- Optimization Results ---\n"
+        f"Original Size:   {dict_img_nature_optimized['original_size']} px\n"
+        f"Original Cost:   ~{dict_img_nature_optimized['original_tokens']} tokens\n"
+        f"{'-' * 30}\n"
+        f"Target Cost:     ~{img_max_tokens} tokens\n"
+        f"Optimized Size:  {dict_img_nature_optimized['optimized_size']} px (Multiple of 14? Yes)\n"
+        f"Optimized Cost:  ~{dict_img_nature_optimized['optimized_tokens']} tokens"
+    )
     for i, result in enumerate(batch_results):
         if isinstance(result, Exception):
-            logger.error(f"Request {i} failed: {result}\n\n")
+            logger.error(f"Request {i} failed: {result}")
         else:
-            logger.info(f"# Assistant Response {i}:\n{result.choices[0].message.content.strip()}\n\n")
+            logger.info(f"Assistant Response {i}: {result.choices[0].message.content.strip()}")
 
     # Cleanup explicitly
     client.kill_inference_engines()
