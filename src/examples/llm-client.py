@@ -271,7 +271,7 @@ def main() -> None:
 
         # 1. Download Image with User-Agent header to avoid 403 Forbidden
         headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" # noqa
         }
 
         response = requests.get(image_url, headers=headers, stream=True)
