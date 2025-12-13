@@ -68,7 +68,7 @@ class _LocalServerManager:
                     if proc.info["pid"] == current_pid:
                         continue
 
-                    logger.warning(f"Force killing GPU hoarder: {proc.info['name']} (PID: {proc.info['pid']})")
+                    logger.warning(f"Force killing CPU/GPU hoarder: {proc.info['name']} (PID: {proc.info['pid']})")
 
                     # Send SIGKILL - no mercy for zombies
                     proc.kill()
