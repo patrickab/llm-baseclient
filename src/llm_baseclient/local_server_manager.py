@@ -8,7 +8,7 @@ from typing import Optional
 import psutil
 import requests
 
-from llm_baseclient.config import OLLAMA_PORT, VLLM_BASE_URL, VLLM_GPU_UTIL, VLLM_PORT
+from llm_baseclient.config import MAX_TOKEN_DEFAULT_VLLM, OLLAMA_PORT, VLLM_BASE_URL, VLLM_GPU_UTIL, VLLM_PORT
 from llm_baseclient.logger import get_logger
 
 logger = get_logger()
@@ -116,7 +116,7 @@ class _LocalServerManager:
             _, stderr = self._process.communicate()
             raise RuntimeError(f"Server failed to start. Logs:\n{stderr.decode('utf-8') if stderr else 'Unknown error'}")
 
-    def ensure_vllm(self, model_name: str) -> None:
+    def ensure_vllm(self, model_name: str, max_tokens: Optional[int] = MAX_TOKEN_DEFAULT_VLLM) -> None:
         """Ensures a vLLM server is running with the specified model."""
         if self._get_running_vllm_model(VLLM_BASE_URL) == model_name:
             return
@@ -127,11 +127,31 @@ class _LocalServerManager:
         # NOTE: --allow-remote-code is needed for some custom models
         vllm_url = f"http://localhost:{VLLM_PORT}/v1/models"
         try:  # try GPU first
-            vllm_cmd = ["vllm", "serve", model_name, "--port", str(VLLM_PORT), "--gpu-memory-utilization", str(VLLM_GPU_UTIL)]
+            vllm_cmd = [
+                "vllm",
+                "serve",
+                model_name,
+                "--port",
+                str(VLLM_PORT),
+                "--gpu-memory-utilization",
+                str(VLLM_GPU_UTIL),
+                "--max-model-len",  # max context length
+                str(max_tokens),
+            ]
             self._spawn_server(cmd=vllm_cmd, health_check_url=vllm_url, install_hint="Install via: pip install vllm")
         except Exception:
             try:  # fall back to CPU
-                vllm_cmd = ["vllm", "serve", model_name, "--port", str(VLLM_PORT), "--device", "cpu"]
+                vllm_cmd = [
+                    "vllm",
+                    "serve",
+                    model_name,
+                    "--port",
+                    str(VLLM_PORT),
+                    "--device",
+                    "cpu",
+                    "--max-tokens",
+                    str(max_tokens),
+                ]
                 self._spawn_server(cmd=vllm_cmd, health_check_url=vllm_url, install_hint="Install via: pip install vllm")
             except Exception:
                 raise

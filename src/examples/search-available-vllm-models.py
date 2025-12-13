@@ -46,14 +46,15 @@ except AttributeError:
     # Fallback for older versions
     print("⚠️ Warning: Using older vLLM architecture detection.")
     from vllm.model_executor.model_loader import _MODEL_REGISTRY
+
     supported_archs = list(_MODEL_REGISTRY.keys())
 
 print(f"✅ Found {len(supported_archs)} supported architectures.")
 
 # Print examples in batches of 5
 for i in range(0, len(supported_archs), 5):
-    batch = supported_archs[i:i+5]
-    print(f"Architectures [{i}-{min(i+4, len(supported_archs)-1)}]: {batch}")
+    batch = supported_archs[i : i + 5]
+    print(f"Architectures [{i}-{min(i + 4, len(supported_archs) - 1)}]: {batch}")
 
 # %% [markdown]
 # # 3️⃣ Fetch Popular Models from Hugging Face
@@ -61,13 +62,7 @@ for i in range(0, len(supported_archs), 5):
 print("⏳ Fetching top 2,000 trending models from HF (this takes a moment)...")
 
 # We fetch config to see the architecture
-models = api.list_models(
-    library="transformers",
-    sort="downloads",
-    direction="-1",
-    limit=1000,
-    fetch_config=True
-)
+models = api.list_models(library="transformers", sort="downloads", direction="-1", limit=1000, fetch_config=True)
 
 vllm_compatible = []
 
@@ -75,19 +70,21 @@ for m in models:
     # Safety check if config exists
     if not m.config:
         continue
-    
+
     # Get model architecture list (e.g., ['LlamaForCausalLM'])
     model_archs = m.config.get("architectures", [])
-    
+
     # Check if ANY of the model's architectures are in vLLM's supported list
     if any(arch in supported_archs for arch in model_archs):
-        vllm_compatible.append({
-            "Model ID": m.modelId,
-            "Architecture": model_archs[0] if model_archs else "Unknown",
-            "Downloads": m.downloads,
-            "Gated": m.gated,
-            "Private": m.private
-        })
+        vllm_compatible.append(
+            {
+                "Model ID": m.modelId,
+                "Architecture": model_archs[0] if model_archs else "Unknown",
+                "Downloads": m.downloads,
+                "Gated": m.gated,
+                "Private": m.private,
+            }
+        )
 
 print(f"✅ Found {len(vllm_compatible)} vLLM-compatible models among the top 2,000.")
 
@@ -104,10 +101,12 @@ df.head(20)
 # # 5️⃣ Filter Tools
 # Easy filtering for specific families or types.
 
+
 # %%
 def search_models(keyword: str) -> pd.DataFrame:
     subset = df[df["Model ID"].str.contains(keyword, case=False)]
     return subset[["Model ID", "Architecture", "Downloads"]]
+
 
 print(f"Llama 3 Models: {len(search_models('Llama-3'))}")
 print(f"Qwen Models:    {len(search_models('Qwen'))}")
@@ -117,7 +116,7 @@ print(f"GPTQ Quantized: {len(search_models('gptq'))}")
 
 # Example: Show top 5 AWQ models
 print("\n--- Top AWQ Models ---")
-print(search_models('awq').head(5))
+print(search_models("awq").head(5))
 
 # %% [markdown]
 # # 6️⃣ Correct Local Cache Check
@@ -135,19 +134,15 @@ try:
         if repo.repo_type == "model":
             # Check for the primary revision (usually main)
             size_mb = repo.size_on_disk / (1024 * 1024)
-            local_repos.append({
-                "Model ID": repo.repo_id,
-                "Size (MB)": f"{size_mb:.2f}",
-                "Refs": [r.ref_name for r in repo.refs]
-            })
+            local_repos.append({"Model ID": repo.repo_id, "Size (MB)": f"{size_mb:.2f}", "Refs": [r.ref_name for r in repo.refs]})
 
     df_local = pd.DataFrame(local_repos)
-    
+
     if not df_local.empty:
         # Check compatibility of local models against vLLM list
-        # Note: This is a string match. For 100% accuracy we'd load config, 
+        # Note: This is a string match. For 100% accuracy we'd load config,
         # but checking if the ID exists in our 'vllm_compatible' list is a good proxy.
-        
+
         print(f"✅ Found {len(df_local)} cached models.")
         print(df_local.head(10))
     else:

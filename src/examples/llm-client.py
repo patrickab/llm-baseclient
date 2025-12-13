@@ -10,6 +10,11 @@ logger = get_logger()
 
 def main() -> None:
     client = LLMClient()
+    # select your preferred vision model here
+    # Ministral-3 is a good lightweight option for weak GPUs
+    vision_model = "hosted_vllm/mistralai/Ministral-3-3B-Instruct-2512"
+    # If you are using CPU use Ollama as VLM client.
+    # vision_model = "ollama/ministral-3:3b"
 
     """Stateless API call (non-streaming)"""
     # ------------------- Commercial Providers ------------------- #
@@ -46,7 +51,6 @@ def main() -> None:
 
     """Image input examples"""
     # Adjust model as needed - Ministral-3 runs fast on weak laptop CPUs
-    visual_model = "ollama/ministral-3:3b"
 
     def print_stream(stream) -> None:  # noqa
         print("\nImage Input Response:")
@@ -57,7 +61,7 @@ def main() -> None:
     # Image via web URL
     logger.info("Image via web URL")
     stream = client.api_query(
-        model=visual_model,
+        model=vision_model,
         user_msg="Should I take this fight?",
         img="https://static.wikia.nocookie.net/essentialsdocs/images/7/70/Battle.png/revision/latest/scale-to-width-down/256?cb=20220523172438",
         stream=True,
@@ -67,21 +71,21 @@ def main() -> None:
     # Image via local file path
     logger.info("Image via local file path")
     stream = client.api_query(
-        model=visual_model, user_msg="Should I take this fight?", img=Path("./assets/example-img.webp"), stream=True
+        model=vision_model, user_msg="Should I take this fight?", img=Path("./assets/example-img.webp"), stream=True
     )
     print_stream(stream)
 
     # Supports different file formats & does not require Path input
     logger.info("Image via local JPEG file path")
     stream = client.api_query(
-        model=visual_model, user_msg="Analyze why this picture is funny.", img="./assets/example-img.jpeg", stream=True
+        model=vision_model, user_msg="Analyze why this picture is funny.", img="./assets/example-img.jpeg", stream=True
     )
     print_stream(stream)
 
     # Supports multiple images per request (as list of Paths, bytes, NOT mixed)
     logger.info("Multiple images via local file paths")
     stream = client.api_query(
-        model=visual_model,
+        model=vision_model,
         user_msg="Describe both images.",
         img=[Path("./assets/example-img.webp"), Path("./assets/example-img.jpeg")],
         stream=True,
@@ -93,7 +97,7 @@ def main() -> None:
     with open("./assets/example-img.jpeg", "rb") as f:
         img_bytes = f.read()
 
-    stream = client.api_query(model=visual_model, user_msg="What is in this image?", img=img_bytes, stream=True)
+    stream = client.api_query(model=vision_model, user_msg="What is in this image?", img=img_bytes, stream=True)
     print_stream(stream)
 
     """Advanced Configuration: System Prompts, JSON Mode & Parameters"""
@@ -104,7 +108,7 @@ def main() -> None:
     # Provider- or model-specific parameters can also be passed via `extra_body` dict in kwargs.
     kwargs = {
         "max_tokens": 100,
-        "reasoning_effort": "none" # none | low | medium | high
+        "reasoning_effort": "none",  # none | low | medium | high
     }
     response = client.api_query(
         model="openai/gpt-5.2",
@@ -124,7 +128,7 @@ def main() -> None:
 
     """Embeddings Generation - RAG Retrieval Example"""
     logger.info("Generating Embeddings for RAG Retrieval")
-    
+
     # Simulate a tiny knowledge base about pizza
     embedding_model = "ollama/embeddinggemma:300m"
     dummy_docs = [
@@ -133,7 +137,7 @@ def main() -> None:
         "Pineapple on pizza is called Hawaiian pizza and was invented in Canada.",
         "The world's most expensive pizza costs $12,000 and includes gold flakes.",
     ]
-    
+
     dummy_query = "Tell me something weird about pineapple pizza"
 
     # Generate embeddings for knowledge base and query
@@ -152,6 +156,38 @@ def main() -> None:
 
     logger.info(f"Query: '{dummy_query}'")
     logger.info(f"Retrieved Context: '{retrieved_context}'")
+
+    """Multimodal Batch Processing"""
+    logger.info("Running Batch Multimodal Analysis")
+
+    # Mock image data (using public placeholders for reproducibility)
+    # In practice, use Path("./local_image.jpg") or b"raw_bytes"
+    img_nature = "https://upload.wikimedia.org/wikipedia/commons/thumb/d/dd/Gfp-wisconsin-madison-the-nature-boardwalk.jpg/2560px-Gfp-wisconsin-madison-the-nature-boardwalk.jpg"
+    img_space = "https://upload.wikimedia.org/wikipedia/commons/thumb/9/91/Bruce_McCandless_II_during_EVA_in_1984.jpg/1024px-Bruce_McCandless_II_during_EVA_in_1984.jpg"
+
+    # Construct a batch of diverse requests
+    # The client handles the complexity of formatting these for the provider automatically.
+    batch_workload = [
+        # Request 1: Analyze a single image
+        {"user_msg": "Describe the weather and atmosphere in this image.", "img": img_nature},
+        # Request 2: Compare two images (Text + Multiple Images)
+        {"user_msg": "Compare the environments in these two images. Which one is on Earth?", "img": [img_nature, img_space]},
+        # Request 3: Pure visual captioning (No user text, just system prompt + image)
+        {"system_prompt": "You are a poetic caption generator. Output only a haiku.", "img": img_space},
+    ]
+
+    # Execute parallel batch
+    # This runs concurrently, maximizing throughput on vLLM or avoiding blocking on Cloud APIs
+    logger.info(f"Dispatching {len(batch_workload)} multimodal requests to {vision_model}...")
+
+    batch_results = client.batch_api_query(requests=batch_workload, model=vision_model, temperature=0.2, max_tokens=100)
+
+    # Process results
+    for i, result in enumerate(batch_results):
+        if isinstance(result, Exception):
+            logger.error(f"\n\nRequest {i} failed: {result}")
+        else:
+            logger.info(f"\n\nResult {i}: {result.choices[0].message.content.strip()}")
 
     # Cleanup explicitly
     client.kill_inference_engines()

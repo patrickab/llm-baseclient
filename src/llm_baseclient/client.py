@@ -8,14 +8,15 @@ Supports multimodal inputs (images via paths, bytes, data URIs, URLs) - voice co
 
 import base64
 from pathlib import Path
-from typing import Dict, Iterator, List, Optional, Tuple, Union
+from typing import Any, Dict, Iterator, List, Optional, Tuple, Union
 
 import filetype
-from litellm import completion, embedding
+from litellm import batch_completion, completion, embedding
+from litellm.types.utils import ModelResponse
 from litellm.utils import EmbeddingResponse
 from openai.types.chat import ChatCompletion
 
-from llm_baseclient.config import OLLAMA_PORT, VLLM_PORT
+from llm_baseclient.config import MAX_PARALLEL_REQUESTS, OLLAMA_PORT, VLLM_PORT
 from llm_baseclient.local_server_manager import _LocalServerManager
 from llm_baseclient.logger import get_logger
 
@@ -78,7 +79,7 @@ class LLMClient:
 
         # Detect mime and encode
         kind = filetype.guess(img)
-        mime_type = kind.mime if kind else "image/jpeg" # fallback to jpeg
+        mime_type = kind.mime if kind else "image/jpeg"  # fallback to jpeg
         b64_encoded = base64.b64encode(img).decode("utf-8")
         return f"data:{mime_type};base64,{b64_encoded}"
 
@@ -101,6 +102,48 @@ class LLMClient:
 
         return model_input, None, None
 
+    def _construct_message_payload(
+        self,
+        user_msg: Optional[str] = None,
+        user_msg_history: Optional[List[Dict[str, str]]] = None,
+        system_prompt: Optional[str] = None,
+        img: Optional[Path | List[Path] | bytes | List[bytes]] = None,
+    ) -> List[Dict[str, Any]]:
+        """
+        Pure function: Converts raw inputs into a LiteLLM-compatible messages list.
+        Decouples data prep from execution.
+        """
+        # 1. Process Images
+        img_data = []
+        if img is not None:
+            items = img if isinstance(img, (list, tuple)) else [img]
+            img_data = [self._process_image(i) for i in items]
+
+        # 2. Build Message History
+        messages = []
+        if system_prompt:
+            messages.append({"role": "system", "content": system_prompt})
+        if user_msg_history:
+            messages.extend(user_msg_history)
+
+        # 3. Construct Current Turn (Multimodal handling)
+        if user_msg or img_data:
+            if not img_data:
+                # Text-only optimization (lower token overhead)
+                messages.append({"role": "user", "content": user_msg})
+            else:
+                # Multimodal payload
+                content_payload = []
+                if user_msg:
+                    content_payload.append({"type": "text", "text": user_msg})
+
+                # Add all images
+                content_payload.extend([{"type": "image_url", "image_url": {"url": i}} for i in img_data])
+                messages.append({"role": "user", "content": content_payload})
+
+        return messages
+
+    # -------------------------------- Core LLM Interaction -------------------------------- #
     # -------------------------------- Core LLM Interaction -------------------------------- #
     def get_embedding(self, model: str, input_text: Union[str, List[str]], **model_kwargs: Dict[str, any]) -> EmbeddingResponse:  # type: ignore
         """
@@ -157,21 +200,9 @@ class LLMClient:
             Exception: If an error occurs during the API call.
         """
 
-        img_data = []
-        if img is not None:
-            items = img if isinstance(img, (list, tuple)) else [img]
-            img_data = [self._process_image(i) for i in items]
-
-        messages = []
-        if system_prompt:
-            messages.append({"role": "system", "content": system_prompt})
-        if user_msg_history:
-            messages.extend(user_msg_history)
-
-        if user_msg or img_data:
-            content_payload = [{"type": "text", "text": user_msg}] if user_msg else []
-            content_payload.extend([{"type": "image_url", "image_url": {"url": i}} for i in img_data])
-            messages.append({"role": "user", "content": content_payload})
+        messages = self._construct_message_payload(
+            user_msg=user_msg, user_msg_history=user_msg_history, system_prompt=system_prompt, img=img
+        )
 
         final_model, api_base, custom_llm_provider = self._resolve_routing(model)
         try:
@@ -204,6 +235,50 @@ class LLMClient:
                 return stream_generator()
         except Exception as e:
             raise e
+
+    def batch_api_query(
+        self,
+        requests: List[Dict[str, Any]],
+        model: str,
+        **kwargs: Dict[str, any],
+    ) -> List[Union[ModelResponse, Exception]]:
+        """
+        Executes parallel stateless batch requests with high throughput.
+
+        Args:
+            requests: A list of dictionaries. Each dict must contain keys corresponding
+                      to arguments of `_construct_message_payload`
+                      (e.g., {'user_msg': '...', 'img': ...}).
+            model: The model identifier.
+            **kwargs: Global overrides (e.g., temperature=0.7).
+
+        Returns:
+            A list of ModelResponse objects (or Exceptions if a specific request failed).
+        """
+        # 1. Pre-calculate all message payloads (CPU-bound)
+        messages_batch = [
+            self._construct_message_payload(
+                user_msg=req.get("user_msg"),
+                user_msg_history=req.get("user_msg_history"),
+                system_prompt=req.get("system_prompt"),
+                img=req.get("img"),
+            )
+            for req in requests
+        ]
+
+        # 2. Execute Parallel Batch (IO-bound)
+        final_model, api_base, custom_llm_provider = self._resolve_routing(model)
+
+        responses = batch_completion(
+            model=final_model,
+            messages=messages_batch,
+            api_base=api_base,
+            custom_llm_provider=custom_llm_provider,
+            max_workers=MAX_PARALLEL_REQUESTS,
+            **kwargs,
+        )
+
+        return responses
 
     def chat(
         self,
