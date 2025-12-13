@@ -83,24 +83,27 @@ class LLMClient:
         b64_encoded = base64.b64encode(img).decode("utf-8")
         return f"data:{mime_type};base64,{b64_encoded}"
 
-    def _resolve_routing(self, model_input: str) -> Tuple[str, Optional[str], Optional[str]]:
-        """Parses 'provider/model' and handles local server spawning."""
+    def _resolve_routing(self, model_input: str, vllm_cmd: Optional[str] = None) -> Tuple[Optional[str], Optional[str]]:
+        """
+        Parses 'provider/model' and handles local server spawning.
+        vllm_cmd allows customizing vLLM server startup behavior.
+        """
         if "/" not in model_input:
             raise ValueError("Model format must be 'provider/model_name'")
 
         provider, model_name = model_input.split("/", 1)
 
         if provider == "hosted_vllm":
-            self.server_manager.ensure_vllm(model_name)
-            return model_input, f"http://localhost:{VLLM_PORT}/v1", "hosted_vllm"
+            self.server_manager.ensure_vllm(model_name, vllm_cmd=vllm_cmd)
+            return f"http://localhost:{VLLM_PORT}/v1", "hosted_vllm"
         elif provider == "ollama":
             self.server_manager.ensure_ollama(model_name)
-            return model_input, f"http://localhost:{OLLAMA_PORT}", "ollama"
+            return f"http://localhost:{OLLAMA_PORT}", "ollama"
 
         # For commercial providers (e.g., openai, anthropic), LiteLLM handles routing natively.
         # api_base and custom_llm_provider remain None, and the original model string is used.
 
-        return model_input, None, None
+        return None, None
 
     def _construct_message_payload(
         self,
@@ -144,8 +147,9 @@ class LLMClient:
         return messages
 
     # -------------------------------- Core LLM Interaction -------------------------------- #
-    # -------------------------------- Core LLM Interaction -------------------------------- #
-    def get_embedding(self, model: str, input_text: Union[str, List[str]], **model_kwargs: Dict[str, any]) -> EmbeddingResponse:  # type: ignore
+    def get_embedding(
+        self, model: str, input_text: Union[str, List[str]], vllm_cmd: Optional[str] = None, **model_kwargs: Dict[str, any]
+    ) -> EmbeddingResponse:
         """
         Generates embeddings for the given input text using the specified model.
         Handles routing for local inference servers (vLLM, Ollama) and commercial providers.
@@ -153,17 +157,22 @@ class LLMClient:
         Args:
             model: Model identifier in [LiteLLM Format](https://models.litellm.ai/) - e.g., 'openai/text-embedding-ada-002').
             input_text: The text or list of texts to embed.
+            vllm_cmd: Customize server startup behavior
             **model_kwargs: Additional keyword arguments passed directly to the LiteLLM `embedding` call.
 
         Returns:
             An EmbeddingResponse object containing the generated embeddings.
         """
-        final_model, api_base, custom_llm_provider = self._resolve_routing(model)
+        api_base, custom_llm_provider = self._resolve_routing(model, vllm_cmd=vllm_cmd)
         # For custom local providers, model_kwargs need to be nested under 'extra_body'.
         model_kwargs = {"extra_body": model_kwargs} if custom_llm_provider else model_kwargs
 
         response = embedding(
-            model=final_model, input=input_text, api_base=api_base, custom_llm_provider=custom_llm_provider, **model_kwargs
+            model=model,
+            input=input_text,
+            api_base=api_base,
+            custom_llm_provider=custom_llm_provider,
+            **model_kwargs,
         )
         return response
 
@@ -175,6 +184,7 @@ class LLMClient:
         system_prompt: Optional[str] = None,
         img: Optional[Path | List[Path] | bytes | List[bytes]] = None,
         stream: bool = False,
+        vllm_cmd: Optional[str] = None,
         **kwargs: Dict[str, any],
     ) -> Iterator[str] | ChatCompletion:
         """
@@ -190,6 +200,7 @@ class LLMClient:
             img: Optional image input(s) as file paths, raw bytes, or a list of these.
             stream: If True, returns an iterator yielding chunks of the response.
                     If False, returns a complete ChatCompletion object.
+            vllm_cmd: Customize server startup behavior
             **kwargs: Additional keyword arguments passed directly to the LiteLLM `completion` call
                       (e.g., `temperature`, `top_p`, `max_tokens`).
 
@@ -204,10 +215,10 @@ class LLMClient:
             user_msg=user_msg, user_msg_history=user_msg_history, system_prompt=system_prompt, img=img
         )
 
-        final_model, api_base, custom_llm_provider = self._resolve_routing(model)
+        api_base, custom_llm_provider = self._resolve_routing(model, vllm_cmd=vllm_cmd)
         try:
             response = completion(
-                model=final_model,
+                model=model,
                 messages=messages,
                 stream=stream,
                 api_base=api_base,
@@ -240,6 +251,7 @@ class LLMClient:
         self,
         requests: List[Dict[str, Any]],
         model: str,
+        vllm_cmd: Optional[str] = None,
         **kwargs: Dict[str, any],
     ) -> List[Union[ModelResponse, Exception]]:
         """
@@ -250,6 +262,7 @@ class LLMClient:
                       to arguments of `_construct_message_payload`
                       (e.g., {'user_msg': '...', 'img': ...}).
             model: The model identifier.
+            vllm_cmd: Customize server startup behavior
             **kwargs: Global overrides (e.g., temperature=0.7).
 
         Returns:
@@ -267,14 +280,14 @@ class LLMClient:
         ]
 
         # 2. Execute Parallel Batch (IO-bound)
-        final_model, api_base, custom_llm_provider = self._resolve_routing(model)
+        api_base, custom_llm_provider = self._resolve_routing(model, vllm_cmd=vllm_cmd)
 
         responses = batch_completion(
-            model=final_model,
+            model=model,
             messages=messages_batch,
             api_base=api_base,
             custom_llm_provider=custom_llm_provider,
-            max_workers=MAX_PARALLEL_REQUESTS,
+            max_workers=MAX_PARALLEL_REQUESTS if "max_workers" not in kwargs else kwargs.pop("max_workers"),
             **kwargs,
         )
 
@@ -287,6 +300,7 @@ class LLMClient:
         system_prompt: Optional[str] = "",
         img: Optional[Path | List[Path] | bytes | List[bytes]] = None,
         stream: bool = True,
+        vllm_cmd: Optional[str] = None,
         **kwargs: Dict[str, any],
     ) -> Iterator[str] | ChatCompletion:
         """
@@ -298,6 +312,7 @@ class LLMClient:
             system_prompt: An optional system-level instruction for the model.
             img: Optional image input(s) for multimodal messages.
             stream: If True, streams the response. If False, returns the complete response.
+            vllm_cmd: Customize vLLM server startup behavior
             **kwargs: Additional keyword arguments passed to `api_query`.
 
         Returns:
@@ -310,6 +325,7 @@ class LLMClient:
             system_prompt=system_prompt,
             img=img,
             stream=stream,
+            vllm_cmd=vllm_cmd,
             **kwargs,
         )
 
