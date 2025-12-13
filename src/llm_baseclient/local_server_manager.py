@@ -6,10 +6,10 @@ import socket
 import subprocess
 import time
 from typing import Optional
+import urllib
 
 import psutil
 import requests
-import urllib
 
 from llm_baseclient.config import OLLAMA_PORT, VLLM_BASE_URL, VLLM_PORT, vllm_default_command
 from llm_baseclient.logger import get_logger
