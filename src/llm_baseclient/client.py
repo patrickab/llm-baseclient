@@ -78,7 +78,7 @@ class LLMClient:
 
         # Detect mime and encode
         kind = filetype.guess(img)
-        mime_type = kind.mime if kind else "image/jpeg"
+        mime_type = kind.mime if kind else "image/jpeg" # fallback to jpeg
         b64_encoded = base64.b64encode(img).decode("utf-8")
         return f"data:{mime_type};base64,{b64_encoded}"
 
