@@ -12,9 +12,9 @@ def main() -> None:
     client = LLMClient()
     # select your preferred vision model here
     # Ministral-3 is a good lightweight option for weak GPUs
-    vision_model = "hosted_vllm/mistralai/Ministral-3-3B-Instruct-2512"
+    # vision_model = "hosted_vllm/mistralai/Ministral-3-3B-Instruct-2512"
     # If you are using CPU use Ollama as VLM client.
-    # vision_model = "ollama/ministral-3:3b"
+    vision_model = "ollama/ministral-3:3b"
 
     """Stateless API call (non-streaming)"""
     # ------------------- Commercial Providers ------------------- #
@@ -49,8 +49,12 @@ def main() -> None:
     response = client.chat(model="ollama/gemma3:4b", user_msg="Who's there?", stream=False)
     logger.info("Message History:\n\n" + str(client.messages))
 
-    """Image input examples"""
-    # Adjust model as needed - Ministral-3 runs fast on weak laptop CPUs
+    """
+    Image input examples
+    
+    Supports images as web URLs, local file paths, raw bytes or byte strings.
+    Supports multiple images as list.
+    """
 
     def print_stream(stream) -> None:  # noqa
         print("\nImage Input Response:")
@@ -100,12 +104,15 @@ def main() -> None:
     stream = client.api_query(model=vision_model, user_msg="What is in this image?", img=img_bytes, stream=True)
     print_stream(stream)
 
-    """Advanced Configuration: System Prompts, JSON Mode & Parameters"""
+    """
+    Advanced Configuration: System Prompts, JSON Mode & Parameters
+
+        - any kwargs can be passed according to LiteLLM conventions
+        - LiteLLM adheres to OpenAI API & translates as needed for other providers.
+        - You can therefore use reasoning_effort for Gemini Models, although the Gemini docs require different syntax.
+        - Provider- or model-specific parameters can also be passed via `extra_body` dict in kwargs.
+    """
     logger.info("Advanced Configuration: JSON Output & Temperature")
-    # Any llm specific kwargs can be passed according to LiteLLM conventions.
-    # LiteLLM adheres to OpenAI API & translates as needed for other providers.
-    # Using Litellm you can therefore use reasoning_effort for Gemini Models, although the Gemini docs require different syntax.
-    # Provider- or model-specific parameters can also be passed via `extra_body` dict in kwargs.
     kwargs = {
         "max_tokens": 100,
         "reasoning_effort": "none",  # none | low | medium | high
@@ -126,19 +133,22 @@ def main() -> None:
     )
     logger.info("JSON Response:\n" + response.choices[0].message.content + "\n")
 
-    """Embeddings Generation - RAG Retrieval Example"""
+    """
+    Embeddings Generation
+    
+    Simple RAG Retrieval Example
+        - for client-compatible RAG database refer to  https://github.com/patrickab/rag-database
+    """
     logger.info("Generating Embeddings for RAG Retrieval")
 
-    # Simulate a tiny knowledge base about pizza
     embedding_model = "ollama/embeddinggemma:300m"
+    dummy_query = "Tell me something weird about pineapple pizza"
     dummy_docs = [
         "Pizza was invented in Naples, Italy in the 18th century.",
         "The most popular pizza topping in America is pepperoni.",
         "Pineapple on pizza is called Hawaiian pizza and was invented in Canada.",
         "The world's most expensive pizza costs $12,000 and includes gold flakes.",
     ]
-
-    dummy_query = "Tell me something weird about pineapple pizza"
 
     # Generate embeddings for knowledge base and query
     db_embeddings = client.get_embedding(model=embedding_model, input_text=dummy_docs)
@@ -157,22 +167,26 @@ def main() -> None:
     logger.info(f"Query: '{dummy_query}'")
     logger.info(f"Retrieved Context: '{retrieved_context}'")
 
-    """Multimodal Batch Processing"""
+    """
+    Multimodal Batch Processing
+
+    Asynchronous batch processing
+        - maximizes throughput
+        - Does not reduce API costs for commercial providers
+    """
     logger.info("Running Batch Multimodal Analysis")
 
-    # Mock image data (using public placeholders for reproducibility)
-    # In practice, use Path("./local_image.jpg") or b"raw_bytes"
     img_nature = "https://upload.wikimedia.org/wikipedia/commons/thumb/d/dd/Gfp-wisconsin-madison-the-nature-boardwalk.jpg/2560px-Gfp-wisconsin-madison-the-nature-boardwalk.jpg"
     img_space = "https://upload.wikimedia.org/wikipedia/commons/thumb/9/91/Bruce_McCandless_II_during_EVA_in_1984.jpg/1024px-Bruce_McCandless_II_during_EVA_in_1984.jpg"
 
     # Construct a batch of diverse requests
-    # The client handles the complexity of formatting these for the provider automatically.
+    # The client handles provider-specific formatting automatically.
+    # Request 1: Analyze a single image
+    # Request 2: Compare two images (Text + Multiple Images)
+    # Request 3: Pure visual captioning (No user text, just system prompt + image)
     batch_workload = [
-        # Request 1: Analyze a single image
         {"user_msg": "Describe the weather and atmosphere in this image.", "img": img_nature},
-        # Request 2: Compare two images (Text + Multiple Images)
         {"user_msg": "Compare the environments in these two images. Which one is on Earth?", "img": [img_nature, img_space]},
-        # Request 3: Pure visual captioning (No user text, just system prompt + image)
         {"system_prompt": "You are a poetic caption generator. Output only a haiku.", "img": img_space},
     ]
 
