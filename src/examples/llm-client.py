@@ -15,12 +15,12 @@ def main() -> None:
     # ------------------- Commercial Providers ------------------- #
     # Assumes API keys set in environment variables using provider conventions.
     response = client.api_query(model="openai/gpt-5.2", user_msg="Hello, world!")
-    response = client.api_query(model="gemini/gemini-3-pro", user_msg="Hello, world!")
+    response = client.api_query(model="gemini/gemini-2.5-flash", user_msg="Hello, world!")
 
     # --------------- Open-Source / Local Providers -------------- #
     # Assumes vLLM is installed - automatically downloads model if not present.
     response = client.api_query(model="hosted_vllm/Qwen/Qwen3-0.6B", user_msg="Hello, world!")
-    # Assumes Ollama is installed - assumes model is already downloaded.
+    # Assumes Ollama is installed - automatically downloads model if not present.
     response = client.api_query(model="ollama/gemma3:4b", user_msg="Hello, world!")
 
     # -------------------- Responses Handling -------------------- #
@@ -40,8 +40,8 @@ def main() -> None:
     print("\n\n")
 
     """Stateful chat interactions"""
-    response = client.chat(model="ollama/gemma3:4b", user_msg="Tell me a joke.", stream=False)
-    response = client.chat(model="ollama/gemma3:4b", user_msg="Not funny - another one.", stream=False)
+    response = client.chat(model="ollama/gemma3:4b", user_msg="Tell me a knock knock joke.", stream=False)
+    response = client.chat(model="ollama/gemma3:4b", user_msg="Who's there?", stream=False)
     logger.info("Message History:\n\n" + str(client.messages))
 
     """Image input examples"""
@@ -103,13 +103,11 @@ def main() -> None:
     # Using Litellm you can therefore use reasoning_effort for Gemini Models, although the Gemini docs require different syntax.
     # Provider- or model-specific parameters can also be passed via `extra_body` dict in kwargs.
     kwargs = {
-        "temperature": 0.2,
-        "top_p": 0.9,
         "max_tokens": 100,
-        "reasoning_effort": "low" # none | low | medium | high
+        "reasoning_effort": "none" # none | low | medium | high
     }
     response = client.api_query(
-        model="openai/gpt-4-turbo",
+        model="openai/gpt-5.2",
         user_msg="List 3 primary colors in JSON format: {colors: []}",
         system_prompt="You are a JSON-only assistant.",
         response_format={"type": "json_object"},
@@ -137,20 +135,22 @@ def main() -> None:
     ]
     
     dummy_query = "Tell me something weird about pineapple pizza"
-    
+
     # Generate embeddings for knowledge base and query
     db_embeddings = client.get_embedding(model=embedding_model, input_text=dummy_docs)
+    db_embeddings = np.array([emb["embedding"] for emb in db_embeddings["data"]])
     query_embedding = client.get_embedding(model=embedding_model, input_text=dummy_query)
-    
+    query_embedding = np.array(query_embedding["data"][0]["embedding"])
+
     # Simple cosine similarity to find most relevant document (normally you'd use a vector DB)
-    query_vec = np.array(query_embedding.data[0].embedding)
     similarities = [
-        np.dot(query_vec, np.array(emb.embedding)) / (np.linalg.norm(query_vec) * np.linalg.norm(np.array(emb.embedding)))
-        for emb in db_embeddings.data
+        np.dot(query_embedding, np.array(emb)) / (np.linalg.norm(query_embedding) * np.linalg.norm(np.array(emb)))
+        for emb in db_embeddings
     ]
     best_match_idx = np.argmax(similarities)
     retrieved_context = dummy_docs[best_match_idx]
-    
+
+    logger.info(f"Query: '{dummy_query}'")
     logger.info(f"Retrieved Context: '{retrieved_context}'")
 
     # Cleanup explicitly
