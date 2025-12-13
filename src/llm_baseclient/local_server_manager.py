@@ -129,8 +129,9 @@ class _LocalServerManager:
             cmd=vllm_cmd, health_check_url=f"http://localhost:{VLLM_PORT}/v1/models", install_hint="Install via: pip install vllm"
         )
 
-    def ensure_ollama(self) -> None:
+    def ensure_ollama(self, model_name: str) -> None:
         """Ensures an Ollama server is running."""
+        subprocess.call(["ollama", "pull", model_name], stderr=subprocess.DEVNULL)
         if self._is_port_open(OLLAMA_PORT):
             # If Ollama is running, just ensure vLLM is off
             self._kill_inference_engines(targets={"vllm"})

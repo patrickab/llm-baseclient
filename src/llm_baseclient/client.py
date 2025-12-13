@@ -93,7 +93,7 @@ class LLMClient:
             self.server_manager.ensure_vllm(model_name)
             return model_input, f"http://localhost:{VLLM_PORT}/v1", "hosted_vllm"
         elif provider == "ollama":
-            self.server_manager.ensure_ollama()
+            self.server_manager.ensure_ollama(model_name)
             return model_input, f"http://localhost:{OLLAMA_PORT}", "ollama"
 
         # For commercial providers (e.g., openai, anthropic), LiteLLM handles routing natively.
