@@ -21,6 +21,7 @@ from llm_baseclient.logger import get_logger
 
 logger = get_logger()
 
+
 # ----------------------------------- Client ---------------------------------- #
 class LLMClient:
     """
@@ -64,9 +65,9 @@ class LLMClient:
         """Standardizes image inputs (Path, bytes, or data-URI) into a Base64 data URI or passes URL."""
 
         if isinstance(img, str) and img.startswith(("http://", "https://", "data:image")):
-                # LiteLLM/OpenAI can download the image themselves.
-                # data:image implies already data URI format.
-                return img
+            # LiteLLM/OpenAI can download the image themselves.
+            # data:image implies already data URI format.
+            return img
 
         # Normalize to bytes
         if isinstance(img, (Path, str)):
@@ -101,11 +102,7 @@ class LLMClient:
         return model_input, None, None
 
     # -------------------------------- Core LLM Interaction -------------------------------- #
-    def get_embedding(
-        self, model: str,
-        input_text: Union[str, List[str]],
-        **model_kwargs: Dict[str, any]
-    ) -> EmbeddingResponse: # type: ignore
+    def get_embedding(self, model: str, input_text: Union[str, List[str]], **model_kwargs: Dict[str, any]) -> EmbeddingResponse:  # type: ignore
         """
         Generates embeddings for the given input text using the specified model.
         Handles routing for local inference servers (vLLM, Ollama) and commercial providers.
@@ -123,22 +120,19 @@ class LLMClient:
         model_kwargs = {"extra_body": model_kwargs} if custom_llm_provider else model_kwargs
 
         response = embedding(
-            model=final_model,
-            input=input_text,
-            api_base=api_base,
-            custom_llm_provider=custom_llm_provider,
-            **model_kwargs
+            model=final_model, input=input_text, api_base=api_base, custom_llm_provider=custom_llm_provider, **model_kwargs
         )
         return response
 
-    def api_query(self,
+    def api_query(
+        self,
         model: str,
         user_msg: Optional[str] = None,
         user_msg_history: Optional[List[Dict[str, str]]] = None,
         system_prompt: Optional[str] = None,
         img: Optional[Path | List[Path] | bytes | List[bytes]] = None,
         stream: bool = False,
-        **kwargs: Dict[str, any]
+        **kwargs: Dict[str, any],
     ) -> Iterator[str] | ChatCompletion:
         """
         Executes a raw API query to an LLM, supporting text-only and multimodal inputs,
@@ -186,12 +180,13 @@ class LLMClient:
                 messages=messages,
                 stream=stream,
                 api_base=api_base,
-                custom_llm_provider=custom_llm_provider, # Defaults to None for commercial providers.
-                **kwargs # Passes additional model parameters like temperature, top_p, max_tokens.
+                custom_llm_provider=custom_llm_provider,  # Defaults to None for commercial providers.
+                **kwargs,  # Passes additional model parameters like temperature, top_p, max_tokens.
             )
             if stream is False:
                 return response
             else:
+
                 def stream_generator() -> Iterator[str]:
                     """
                     Generator wrapper to isolate `yield` keyword from outer function scope.
@@ -205,17 +200,20 @@ class LLMClient:
                                 yield content
                             except GeneratorExit:
                                 return
+
                 return stream_generator()
         except Exception as e:
             raise e
 
-    def chat(self, model: str,
+    def chat(
+        self,
+        model: str,
         user_msg: str,
         system_prompt: Optional[str] = "",
         img: Optional[Path | List[Path] | bytes | List[bytes]] = None,
         stream: bool = True,
-        **kwargs: Dict[str, any]
-    ) -> Iterator[str]|ChatCompletion:
+        **kwargs: Dict[str, any],
+    ) -> Iterator[str] | ChatCompletion:
         """
         Stateful chat wrapper around `api_query` to maintain and update conversation history.
 
