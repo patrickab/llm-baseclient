@@ -125,17 +125,14 @@ class _LocalServerManager:
         self._kill_inference_engines(targets={"vllm", "ollama", "ollama runner"})
 
         # NOTE: --allow-remote-code is needed for some custom models
-        try: # try GPU first
+        vllm_url = f"http://localhost:{VLLM_PORT}/v1/models"
+        try:  # try GPU first
             vllm_cmd = ["vllm", "serve", model_name, "--port", str(VLLM_PORT), "--gpu-memory-utilization", str(VLLM_GPU_UTIL)]
-            self._spawn_server(
-                cmd=vllm_cmd, health_check_url=f"http://localhost:{VLLM_PORT}/v1/models", install_hint="Install via: pip install vllm"
-            )
+            self._spawn_server(cmd=vllm_cmd, health_check_url=vllm_url, install_hint="Install via: pip install vllm")
         except Exception:
-            try: # fall back to CPU
+            try:  # fall back to CPU
                 vllm_cmd = ["vllm", "serve", model_name, "--port", str(VLLM_PORT), "--device", "cpu"]
-                self._spawn_server(
-                    cmd=vllm_cmd, health_check_url=f"http://localhost:{VLLM_PORT}/v1/models", install_hint="Install via: pip install vllm"
-                )
+                self._spawn_server(cmd=vllm_cmd, health_check_url=vllm_url, install_hint="Install via: pip install vllm")
             except Exception:
                 raise
 
