@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 
 import numpy as np
@@ -12,9 +13,9 @@ def main() -> None:
     client = LLMClient()
     # select your preferred vision model here
     # Ministral-3 is a good lightweight option for weak GPUs
-    # vision_model = "hosted_vllm/mistralai/Ministral-3-3B-Instruct-2512"
+    vision_model = "hosted_vllm/mistralai/Ministral-3-3B-Instruct-2512"
     # If you are using CPU use Ollama as VLM client.
-    vision_model = "ollama/ministral-3:3b"
+    # vision_model = "ollama/ministral-3:3b"
 
     """Stateless API call (non-streaming)"""
     # ------------------- Commercial Providers ------------------- #
@@ -51,7 +52,7 @@ def main() -> None:
 
     """
     Image input examples
-    
+
     Supports images as web URLs, local file paths, raw bytes or byte strings.
     Supports multiple images as list.
     """
@@ -135,7 +136,7 @@ def main() -> None:
 
     """
     Embeddings Generation
-    
+
     Simple RAG Retrieval Example
         - for client-compatible RAG database refer to  https://github.com/patrickab/rag-database
     """
@@ -202,6 +203,152 @@ def main() -> None:
             logger.error(f"\n\nRequest {i} failed: {result}")
         else:
             logger.info(f"\n\nResult {i}: {result.choices[0].message.content.strip()}")
+
+    """
+    Optimizations for high-performance local inference with limited VRAM.
+
+    Demonstrates how to use quantization
+    & memory optimizations to...
+    - ...use a 12GB VRAM GPU to load a 28GB model...
+    - ...& simultaneously process 8 images in parallel
+
+    - AWQ 4-bit: Compresses weights to ~9.5GB VRAM - 1% most important parameters are kept as 16-bit float, rest is 4-bit float.
+    - Enforce Eager: Disables CUDA Graphs; saves ~500MB buffer at slight inference speed cost (-10% to -15%).
+    - VRAM Utilization: Allocates max available VRAM, leaving only ~600MB for desktop/overhead.
+    - Max Inference Tokens: Limits KV cache size to prevent OOM during profiling.
+    """
+    # --------------------- Prepare optimization parameters --------------------- #
+    logger.info("Processing with custom vLLM command...")
+    quantized_model = "cyankiwi/Ministral-3-14B-Instruct-2512-AWQ-4bit"
+    os.environ["PYTORCH_ALLOC_CONF"] = "expandable_segments:True"
+    # Max VRAM utilization (0.95 leaves some overhead for system & other apps)
+    gpu_mem_util = 0.95
+    # Higher throughput (tokens per second) but more VRAM usage
+    # Defines number of simultaneous forward passes
+    max_parallel_requests = 8
+    # Restrict max tokens to allow parallelism within VRAM limits
+    # Default: vLLM uses maximum model context length & upon startup
+    #          allocates theoretical maximum of max_tokens*max_requests
+    # input + output tokens = max_tokens
+    # large amount of tokens is needed for images
+    max_tokens = 1024
+    # approximate tokens for image input
+    img_max_tokens = 512
+
+    # --------------------- Prepare vLLM Server start command --------------------- #
+    vllm_cmd = f"vllm serve {quantized_model} --port 8000 --gpu-memory-utilization {gpu_mem_util} --max-model-len {max_tokens} --max-num-seqs {max_parallel_requests} --enforce-eager"  # noqa
+    vllm_cmd = vllm_cmd.split()
+
+    # ----------------------- Optimize images for Ministral ----------------------- #
+
+    PATCH_SIZE = 14  # Ministral/Pixtral patch size - refer to model card for details
+
+    def estimate_ministral_tokens(width: int, height: int) -> tuple[int, tuple[int, int]]:
+        """
+        Estimates token usage for Ministral 3 / Pixtral models.
+
+        Formula:
+        1. Calculate number of 14x14 patches in each dimension.
+        2. Total = (patches_w * patches_h) + patches_h (row break tokens)
+        """
+        import math
+
+        # Ceiling division to account for partial patches (which get padded)
+        patches_w = math.ceil(width / PATCH_SIZE)
+        patches_h = math.ceil(height / PATCH_SIZE)
+
+        total_tokens = (patches_w * patches_h) + patches_h
+        return total_tokens, (patches_w, patches_h)
+
+    def optimize_image_for_ministral(image_url: str, max_tokens: int) -> dict:
+        """For interactive notebook refer to src/examples/"""
+        import base64
+        import io
+        import math
+
+        from PIL import Image
+        import requests
+
+        # 1. Download Image with User-Agent header to avoid 403 Forbidden
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        }
+
+        response = requests.get(image_url, headers=headers, stream=True)
+        response.raise_for_status()
+        img = Image.open(io.BytesIO(response.content))
+
+        original_size = img.size
+
+        # 2. Iteratively find the best scale to fit the token budget
+        current_tokens, _ = estimate_ministral_tokens(img.width, img.height)
+
+        if current_tokens > max_tokens:
+            scale_factor = math.sqrt(max_tokens / current_tokens)
+
+            # Calculate new raw dimensions
+            new_w = int(img.width * scale_factor)
+            new_h = int(img.height * scale_factor)
+
+            # 3. Snap to Grid (Multiples of 14)
+            new_w = round(new_w / PATCH_SIZE) * PATCH_SIZE
+            new_h = round(new_h / PATCH_SIZE) * PATCH_SIZE
+
+            # Ensure we don't shrink to 0
+            new_w = max(new_w, PATCH_SIZE)
+            new_h = max(new_h, PATCH_SIZE)
+
+            # 4. Resize using LANCZOS
+            img = img.resize((new_w, new_h), Image.Resampling.LANCZOS)
+
+        # 5. Convert to Base64
+        buffered = io.BytesIO()
+        if img.mode == "RGBA":
+            img = img.convert("RGB")
+
+        img.save(buffered, format="JPEG", quality=85)
+        img_str = base64.b64encode(buffered.getvalue()).decode("utf-8")
+
+        final_tokens, _ = estimate_ministral_tokens(img.width, img.height)
+
+        return {
+            "original_size": original_size,
+            "original_tokens": current_tokens,
+            "optimized_size": img.size,
+            "optimized_tokens": final_tokens,
+            "base64_url": f"data:image/jpeg;base64,{img_str}",
+        }
+
+    dict_img_nature_optimized = optimize_image_for_ministral(img_nature, max_tokens=img_max_tokens)
+    dict_img_space_optimized = optimize_image_for_ministral(img_space, max_tokens=img_max_tokens)
+    batch_workload = [
+        {"user_msg": "Describe the weather and atmosphere in this image.", "img": dict_img_nature_optimized["base64_url"]},
+        {
+            "user_msg": "Compare the environments in these two images. Which one is on Earth?",
+            "img": [dict_img_nature_optimized["base64_url"], dict_img_space_optimized["base64_url"]],
+        },
+        {"system_prompt": "You are a poetic caption generator. Output only a haiku.", "img": dict_img_space_optimized["base64_url"]},
+    ]
+    batch_results = client.batch_api_query(
+        requests=batch_workload,
+        model=f"hosted_vllm/{quantized_model}",  # litellm requires hosted_vllm/ prefix
+        vllm_cmd=vllm_cmd,
+        temperature=0.2,
+        max_workers=max_parallel_requests,
+    )
+    logger.info("Processing complete. Results:")
+    logger.info("--- Optimization Results ---")
+    logger.info(f"Original Size:   {dict_img_nature_optimized['original_size']} px")
+    logger.info(f"Original Cost:   ~{dict_img_nature_optimized['original_tokens']} tokens")
+    logger.info("-" * 30)
+    logger.info(f"Target Cost:     ~{img_max_tokens} tokens")
+    logger.info(f"Optimized Size:  {dict_img_nature_optimized['optimized_size']} px (Multiple of 14? Yes)")
+    print(f"Optimized Cost:  ~{dict_img_nature_optimized['optimized_tokens']} tokens\n\n")
+    for i, result in enumerate(batch_results):
+        if isinstance(result, Exception):
+            logger.error(f"Request {i} failed: {result}\n\n")
+        else:
+            logger.info(f"# Assistant Response {i}:\n{result.choices[0].message.content.strip()}\n\n")
 
     # Cleanup explicitly
     client.kill_inference_engines()
