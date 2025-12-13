@@ -235,31 +235,123 @@ class LLMClient:
             system_prompt=system_prompt,
             img=img,
             stream=stream,
-            **kwargs)
+            **kwargs,
+        )
 
         if stream is False:
-            response = api_response
-            # Update history for non-streaming responses.
-            self.messages.append({"role": "user", "content": user_msg}) # Store user message
-            self.messages.append({"role": "assistant", "content": response.choices[0].message.content})
-            return response
+            self.messages.append({"role": "user", "content": user_msg})
+            self.messages.append({"role": "assistant", "content": api_response.choices[0].message.content})
+            return api_response
 
-        else:
-            # For streaming responses, accumulate chunks to form the full response
-            # before updating the history.
-            response = ""
+        def _chat_generator() -> Iterator[str]:
+            """
+            Generator wrapper to isolate `yield` keyword from outer function scope.
+            Allows the outer function to conditionally return `Iterator[Str] | ChatCompletion`
+            """
+            full_response_text = ""
             for chunk in api_response:
-                response += chunk
-                try:
-                    yield chunk
-                except GeneratorExit:
-                    return
+                full_response_text += chunk
+                yield chunk
 
-            # Update history for streaming responses after the full response is received.
-            self.messages.append({"role": "user", "content": user_msg}) # Store user message
-            self.messages.append({"role": "assistant", "content": response})
+            # Update history after stream finishes
+            self.messages.append({"role": "user", "content": user_msg})
+            self.messages.append({"role": "assistant", "content": full_response_text})
+
+        return _chat_generator()
 
     # ----------------------------------- Cleanup ---------------------------------- #
-    def close(self) -> None:
+    def kill_inference_engines(self) -> None:
         """Cleans up any background processes."""
-        self.server_manager.stop_server()
+        self.server_manager._kill_inference_engines(targets={"vllm", "ollama", "ollama runner"})
+
+
+if __name__ == "__main__":
+    client = LLMClient()
+
+    """Stateless API call (non-streaming)"""
+    # ------------------- Commercial Providers ------------------- #
+    # Assumes API keys set in environment variables using provider conventions.
+    # response = client.api_query(model="openai/gpt-5.2", user_msg="Hello, world!")
+    # response = client.api_query(model="gemini/gemini-3-pro", user_msg="Hello, world!")
+
+    # --------------- Open-Source / Local Providers -------------- #
+    # Assumes vLLM is installed - automatically downloads model if not present.
+    response = client.api_query(model="hosted_vllm/Qwen/Qwen3-0.6B", user_msg="Hello, world!")
+    # Assumes Ollama is installed - assumes model is already downloaded.
+    response = client.api_query(model="ollama/gemma3:4b", user_msg="Hello, world!")
+
+    # -------------------- Responses Handling -------------------- #
+    # Responses are ChatCompletion objects
+    response = response.choices[0].message.content
+    logger.info("Stateless Response:\n" + response)
+
+    """Stateless API call (streaming)"""
+    # Assumes Ollama is installed - assumes model is already downloaded.
+    stream = client.api_query(model="ollama/gemma3:4b", user_msg="Tell me a joke!", stream=True)
+    response = ""
+    logger.info("Streaming response:")
+    for chunk in stream:
+        print(chunk, end="", flush=True)
+        response += chunk
+
+    print("\n\n")
+
+    """Stateful chat interactions"""
+    response = client.chat(model="ollama/gemma3:4b", user_msg="Tell me a joke.", stream=False)
+    response = client.chat(model="ollama/gemma3:4b", user_msg="Not funny - another one.", stream=False)
+    logger.info("Message History:\n\n" + str(client.messages))
+
+    """Image input examples"""
+    # Adjust model as needed - Ministral-3 runs fast on weak laptop CPUs
+    visual_model = "ollama/ministral-3:3b"
+
+    def print_stream(stream: Iterator[str]) -> None:
+        print("\nImage Input Response:")
+        for chunk in stream:
+            print(chunk, end="", flush=True)
+        print("\n\n")
+
+    # Image via web URL
+    logger.info("Image via web URL")
+    stream = client.api_query(
+        model=visual_model,
+        user_msg="Should I take this fight?",
+        img="https://static.wikia.nocookie.net/essentialsdocs/images/7/70/Battle.png/revision/latest/scale-to-width-down/256?cb=20220523172438",
+        stream=True,
+    )
+    print_stream(stream)
+
+    # Image via local file path
+    logger.info("Image via local file path")
+    stream = client.api_query(
+        model=visual_model, user_msg="Should I take this fight?", img=Path("./assets/example-img.webp"), stream=True
+    )
+    print_stream(stream)
+
+    # Supports different file formats & does not require Path input
+    logger.info("Image via local JPEG file path")
+    stream = client.api_query(
+        model=visual_model, user_msg="Analyze why this picture is funny.", img="./assets/example-img.jpeg", stream=True
+    )
+    print_stream(stream)
+
+    # Supports multiple images per request (as list of Paths, bytes, NOT mixed)
+    logger.info("Multiple images via local file paths")
+    stream = client.api_query(
+        model=visual_model,
+        user_msg="Describe both images.",
+        img=[Path("./assets/example-img.webp"), Path("./assets/example-img.jpeg")],
+        stream=True,
+    )
+    print_stream(stream)
+
+    # Supports raw bytes input
+    logger.info("Image via raw bytes")
+    with open("./assets/example-img.jpeg", "rb") as f:
+        img_bytes = f.read()
+
+    stream = client.api_query(model=visual_model, user_msg="What is in this image?", img=img_bytes, stream=True)
+    print_stream(stream)
+
+    # Cleanup explicitly
+    client.kill_inference_engines()
