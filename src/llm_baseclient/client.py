@@ -17,7 +17,9 @@ from openai.types.chat import ChatCompletion
 
 from llm_baseclient.config import OLLAMA_PORT, VLLM_PORT
 from llm_baseclient.local_server_manager import _LocalServerManager
+from llm_baseclient.logger import get_logger
 
+logger = get_logger()
 
 # ----------------------------------- Client ---------------------------------- #
 class LLMClient:
@@ -61,7 +63,7 @@ class LLMClient:
     def _process_image(self, img: Union[Path, bytes, str]) -> str:
         """Standardizes image inputs (Path, bytes, or data-URI) into a Base64 data URI or passes URL."""
 
-        if img.startswith(("http://", "https://", "data:image")):
+        if isinstance(img, str) and img.startswith(("http://", "https://", "data:image")):
                 # LiteLLM/OpenAI can download the image themselves.
                 # data:image implies already data URI format.
                 return img
@@ -109,7 +111,7 @@ class LLMClient:
         Handles routing for local inference servers (vLLM, Ollama) and commercial providers.
 
         Args:
-            model: Model identifier [LiteLLM Format](https://models.litellm.ai/) - e.g., 'openai/text-embedding-ada-002').
+            model: Model identifier in [LiteLLM Format](https://models.litellm.ai/) - e.g., 'openai/text-embedding-ada-002').
             input_text: The text or list of texts to embed.
             **model_kwargs: Additional keyword arguments passed directly to the LiteLLM `embedding` call.
 
@@ -204,7 +206,6 @@ class LLMClient:
                             except GeneratorExit:
                                 return
                 return stream_generator()
-
         except Exception as e:
             raise e
 
