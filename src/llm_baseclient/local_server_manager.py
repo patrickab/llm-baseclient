@@ -111,32 +111,32 @@ class _LocalServerManager:
             pass
         return None
 
-    def _wait_for_server(self, url: str, timeout: int = 60) -> bool:
-        """Health Check: Blocks until server returns 200 OK."""
-        start_time = time.time()
-        logger.info(f"Waiting for local inference server at {url}...")
-        while time.time() - start_time < timeout:
-            try:
-                requests.get(url, timeout=1.5)
-                logger.info(f"...inference server ready at {url}.")
-                return True
-            except requests.ConnectionError:
-                time.sleep(2)
-        return False
-
-    def _spawn_server(self, cmd: list[str], health_check_url: str, install_hint: str) -> None:
-        """Spawns a server process, waits for health, and captures stderr on failure."""
+    def _spawn_server(self, cmd: list[str], health_check_url: str, install_hint: str, timeout: int = 120) -> None:
         if not shutil.which(cmd[0]):
             raise RuntimeError(f"Command not found: {cmd[0]}. {install_hint}")
 
-        try:
-            self._process = subprocess.Popen(cmd)
-        except Exception as e:
-            raise RuntimeError(f"Failed to spawn server: {e}")
+        self._process = subprocess.Popen(cmd)
 
-        if not self._wait_for_server(health_check_url):
-            _, stderr = self._process.communicate()
-            raise RuntimeError(f"Server failed to start. Stderr: {stderr.decode().strip()}")
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            if self._process.poll() is not None:
+                break  # Process crashed
+            try:
+                if requests.get(health_check_url, timeout=0.5).status_code == 200:
+                    return
+            except requests.RequestException:
+                pass
+            time.sleep(1)
+
+        # Failure handling
+        if self._process.poll() is None:
+            self._process.terminate()
+            raise TimeoutError("LLM Baseclient: Server timed out") from None
+        else:
+            raise RuntimeError(
+                "LLM Baseclient: Server startup failed. GPU resources may be exhausted. "
+                "Refer to console logs for details."
+            ) from None
 
     def ensure_vllm(self, model_name: str, vllm_cmd: Optional[str] = None) -> None:
         """Ensures a vLLM server is running with the specified model."""
@@ -150,7 +150,10 @@ class _LocalServerManager:
         vllm_url = f"http://localhost:{VLLM_PORT}/v1/models"
         if not vllm_cmd:
             vllm_cmd = vllm_default_command(model_name)
-        self._spawn_server(cmd=vllm_cmd, health_check_url=vllm_url, install_hint="Install via: pip install vllm")
+        try:
+            self._spawn_server(cmd=vllm_cmd, health_check_url=vllm_url, install_hint="Install via: pip install vllm")
+        except RuntimeError as e:
+            raise e from None
 
     def ensure_ollama(self, model_name: str) -> None:
         """Ensures an Ollama server is running."""
