@@ -247,6 +247,7 @@ def main() -> None:
     max_tokens = 1024
 
     # approximate tokens for image input
+    # defines how aggressively images are downscaled
     img_max_tokens = 512
 
     # --------------------- Prepare vLLM Server start command --------------------- #
