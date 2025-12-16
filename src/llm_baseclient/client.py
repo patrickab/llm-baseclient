@@ -16,7 +16,7 @@ from litellm.types.utils import ModelResponse
 from litellm.utils import EmbeddingResponse
 from openai.types.chat import ChatCompletion
 
-from llm_baseclient.config import MAX_PARALLEL_REQUESTS, OLLAMA_PORT, VLLM_PORT
+from llm_baseclient.config import MAX_PARALLEL_REQUESTS, OLLAMA_PORT, TABBY_PORT, VLLM_PORT
 from llm_baseclient.local_server_manager import _LocalServerManager
 from llm_baseclient.logger import get_logger
 
@@ -89,16 +89,20 @@ class LLMClient:
         vllm_cmd allows customizing vLLM server startup behavior.
         """
         if "/" not in model_input:
-            raise ValueError("Model format must be 'provider/model_name'")
+            raise Warning(f"Model format must be 'provider/model_name'. Got: {model_input}\nFalling back to openai/{model_input}")
 
         provider, model_name = model_input.split("/", 1)
 
         if provider == "hosted_vllm":
             self.server_manager.ensure_vllm(model_name, vllm_cmd=vllm_cmd)
-            return f"http://localhost:{VLLM_PORT}/v1", "hosted_vllm"
+            return model_input, f"http://localhost:{VLLM_PORT}/v1", "hosted_vllm"
         elif provider == "ollama":
             self.server_manager.ensure_ollama(model_name)
-            return f"http://localhost:{OLLAMA_PORT}", "ollama"
+            return model_input, f"http://localhost:{OLLAMA_PORT}", "ollama"
+        elif provider == "tabby":
+            self.server_manager.ensure_tabby(model_name)
+            model_id = model_input.replace("tabby/", "")
+            return model_id, f"http://localhost:{TABBY_PORT}/v1/", "openai"  # Tabby uses OpenAI-compatible API.
 
         # For commercial providers (e.g., openai, anthropic), LiteLLM handles routing natively.
         # api_base and custom_llm_provider remain None, and the original model string is used.
@@ -163,12 +167,12 @@ class LLMClient:
         Returns:
             An EmbeddingResponse object containing the generated embeddings.
         """
-        api_base, custom_llm_provider = self._resolve_routing(model, vllm_cmd=vllm_cmd)
+        model_id, api_base, custom_llm_provider = self._resolve_routing(model, vllm_cmd=vllm_cmd)
         # For custom local providers, model_kwargs need to be nested under 'extra_body'.
         model_kwargs = {"extra_body": model_kwargs} if custom_llm_provider else model_kwargs
 
         response = embedding(
-            model=model,
+            model=model_id,
             input=input_text,
             api_base=api_base,
             custom_llm_provider=custom_llm_provider,
@@ -215,13 +219,23 @@ class LLMClient:
             user_msg=user_msg, user_msg_history=user_msg_history, system_prompt=system_prompt, img=img
         )
 
-        api_base, custom_llm_provider = self._resolve_routing(model, vllm_cmd=vllm_cmd)
+        # tabby does not support reasoning
+        reasoning_effort = kwargs.pop("reasoning_effort", "standard")
+        reasoning_effort = None if "tabby/" in model else reasoning_effort
+
+        # dummy api key for openai-compatibility
+        # other models use environment variables or no auth
+        if "tabby/" in model and "api_key" not in kwargs:
+            kwargs["api_key"] = "tabby-dummy-key"
+
+        model_id, api_base, custom_llm_provider = self._resolve_routing(model, vllm_cmd=vllm_cmd)
         try:
             response = completion(
-                model=model,
+                model=model_id,
                 messages=messages,
                 stream=stream,
                 api_base=api_base,
+                reasoning_effort=reasoning_effort,
                 custom_llm_provider=custom_llm_provider,  # Defaults to None for commercial providers.
                 **kwargs,  # Passes additional model parameters like temperature, top_p, max_tokens.
             )
@@ -280,10 +294,10 @@ class LLMClient:
         ]
 
         # 2. Execute Parallel Batch (IO-bound)
-        api_base, custom_llm_provider = self._resolve_routing(model, vllm_cmd=vllm_cmd)
+        model_id, api_base, custom_llm_provider = self._resolve_routing(model, vllm_cmd=vllm_cmd)
 
         responses = batch_completion(
-            model=model,
+            model=model_id,
             messages=messages_batch,
             api_base=api_base,
             custom_llm_provider=custom_llm_provider,
@@ -318,6 +332,7 @@ class LLMClient:
         Returns:
             An iterator of strings if `stream` is True, or a ChatCompletion object if `stream` is False.
         """
+
         api_response = self.api_query(
             model=model,
             user_msg=user_msg,
@@ -353,4 +368,4 @@ class LLMClient:
     # ----------------------------------- Cleanup ---------------------------------- #
     def kill_inference_engines(self) -> None:
         """Cleans up any background processes."""
-        self.server_manager._kill_inference_engines(targets={"vllm", "ollama", "ollama runner"})
+        self.server_manager._kill_inference_engines(targets={"vllm", "ollama", "ollama runner", "tabby"})
