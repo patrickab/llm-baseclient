@@ -97,19 +97,25 @@ class LLMClient:
 
         if provider == "hosted_vllm":
             self.server_manager.ensure_vllm(model_name, vllm_cmd=vllm_cmd)
-            return model_input, f"http://localhost:{VLLM_PORT}/v1", "hosted_vllm"
+            model_id = model_input
+            url = f"http://localhost:{VLLM_PORT}/v1/models/{model_name}"
+            provider = "hosted_vllm"
         elif provider == "ollama":
             self.server_manager.ensure_ollama(model_name)
-            return model_input, f"http://localhost:{OLLAMA_PORT}", "ollama"
+            model_id = model_name
+            url = f"http://localhost:{OLLAMA_PORT}"
+            provider = "ollama"
         elif provider == "tabby":
             self.server_manager.ensure_tabby(model_name, tabby_config=tabby_config)
             model_id = model_input.replace("tabby/", "")
-            return model_id, f"http://localhost:{TABBY_PORT}/v1/", "openai"  # Tabby uses OpenAI-compatible API.
+            url = f"http://localhost:{TABBY_PORT}/v1/"
+            provider = "openai"  # Tabby uses OpenAI-compatible API.
+        else: # Commercial provider via LiteLLM
+            model_id = model_input
+            url = None
+            provider = None
 
-        # For commercial providers (e.g., openai, anthropic), LiteLLM handles routing natively.
-        # api_base and custom_llm_provider remain None, and the original model string is used.
-
-        return None, None
+        return model_id, url, provider
 
     def _construct_message_payload(
         self,
