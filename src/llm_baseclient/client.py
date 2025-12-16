@@ -20,7 +20,7 @@ from llm_baseclient.config import MAX_PARALLEL_REQUESTS, OLLAMA_PORT, TABBY_PORT
 from llm_baseclient.local_server_manager import _LocalServerManager
 from llm_baseclient.logger import get_logger
 
-logger = get_logger()
+logger= get_logger()
 
 
 # ----------------------------------- Client ---------------------------------- #
@@ -268,8 +268,10 @@ class LLMClient:
                                 return
 
                 return stream_generator()
-        except Exception as e:
-            raise e
+        except Exception:
+            logger.error("Error during API query", stacklevel=2)
+            return Exception("API query failed")
+
 
     def batch_api_query(
         self,
