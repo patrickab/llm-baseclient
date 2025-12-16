@@ -1,11 +1,12 @@
 import logging
+from logging import Logger
 
 from rich.console import Console
 from rich.logging import RichHandler
 from rich.traceback import install as install_rich_tracebacks
 
 
-def get_logger() -> None:
+def get_logger() -> Logger:
     """Set up a logger with RichHandler for enhanced logging output."""
     install_rich_tracebacks(show_locals=True, suppress=[__file__])
 
