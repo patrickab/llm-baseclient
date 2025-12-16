@@ -5,7 +5,7 @@ import shutil
 import socket
 import subprocess
 import time
-from typing import Optional
+from typing import Any, Optional
 import urllib
 
 import psutil
@@ -169,7 +169,7 @@ class _LocalServerManager:
             cmd=["ollama", "serve"], health_check_url=f"http://localhost:{OLLAMA_PORT}", install_hint="Install via: https://ollama.com"
         )
 
-    def ensure_tabby(self, model_name: Optional[str] = None, tabby_cmd: Optional[list[str]] = None) -> None:
+    def ensure_tabby(self, model_name: Optional[str] = None, tabby_config: Optional[dict[str, Any]] = None) -> None:
         """Ensures TabbyAPI server is running."""
         if self._is_port_open(TABBY_PORT):
             self._kill_inference_engines(targets={"vllm", "ollama", "ollama runner"})
@@ -177,14 +177,26 @@ class _LocalServerManager:
         logger.info("Switching to TabbyAPI...")
         self._kill_inference_engines(targets={"vllm", "ollama", "ollama runner", "tabby"})
 
-        if tabby_cmd is None:
-            TABBY_PYTHON = os.path.join(TABBY_DIR, "venv", "bin", "python")
-            TABBY_START = os.path.join(TABBY_DIR, "start.py")
-            tabby_cmd = [TABBY_PYTHON, TABBY_START]
+        TABBY_PYTHON = os.path.join(TABBY_DIR, "venv", "bin", "python")
+        TABBY_START = os.path.join(TABBY_DIR, "start.py")
+        cmd = [TABBY_PYTHON, TABBY_START]
 
         self._spawn_server(
-            cmd=tabby_cmd,
+            cmd=cmd,
             health_check_url=f"http://localhost:{TABBY_PORT}/v1/models",
             install_hint="Ensure TabbyAPI is configured and 'start.py' is executable.",
             cwd=TABBY_DIR,
         )
+
+        # Configure model
+        payload = {
+            "model_name": model_name,
+            "max_seq_len": tabby_config["max_seq_len"],
+            "cache_mode": tabby_config["cache_mode"],
+        }
+
+        response = requests.post(
+            f"http://localhost:{TABBY_PORT}/v1/model/load",
+            json=payload,
+        )
+        response.raise_for_status()

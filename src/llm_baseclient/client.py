@@ -83,7 +83,9 @@ class LLMClient:
         b64_encoded = base64.b64encode(img).decode("utf-8")
         return f"data:{mime_type};base64,{b64_encoded}"
 
-    def _resolve_routing(self, model_input: str, vllm_cmd: Optional[str] = None) -> Tuple[Optional[str], Optional[str]]:
+    def _resolve_routing(
+        self, model_input: str, vllm_cmd: Optional[str] = None, tabby_config: Optional[dict[str, Any]] = None
+    ) -> Tuple[Optional[str], Optional[str]]:
         """
         Parses 'provider/model' and handles local server spawning.
         vllm_cmd allows customizing vLLM server startup behavior.
@@ -100,7 +102,7 @@ class LLMClient:
             self.server_manager.ensure_ollama(model_name)
             return model_input, f"http://localhost:{OLLAMA_PORT}", "ollama"
         elif provider == "tabby":
-            self.server_manager.ensure_tabby(model_name)
+            self.server_manager.ensure_tabby(model_name, tabby_config=tabby_config)
             model_id = model_input.replace("tabby/", "")
             return model_id, f"http://localhost:{TABBY_PORT}/v1/", "openai"  # Tabby uses OpenAI-compatible API.
 
@@ -227,8 +229,11 @@ class LLMClient:
         # other models use environment variables or no auth
         if "tabby/" in model and "api_key" not in kwargs:
             kwargs["api_key"] = "tabby-dummy-key"
+            tabby_config = kwargs.pop("tabby_config", None)
+        else:
+            tabby_config = None
 
-        model_id, api_base, custom_llm_provider = self._resolve_routing(model, vllm_cmd=vllm_cmd)
+        model_id, api_base, custom_llm_provider = self._resolve_routing(model, vllm_cmd=vllm_cmd, tabby_config=tabby_config)
         try:
             response = completion(
                 model=model_id,
