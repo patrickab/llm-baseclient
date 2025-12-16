@@ -196,7 +196,7 @@ class LLMClient:
         system_prompt: Optional[str] = None,
         img: Optional[Path | List[Path] | bytes | List[bytes]] = None,
         stream: bool = False,
-        **kwargs: Dict[str, any],
+        **kwargs: Dict[str, Any],
     ) -> Iterator[str] | ChatCompletion:
         """
         Executes a raw API query to an LLM, supporting text-only and multimodal inputs,
@@ -275,7 +275,7 @@ class LLMClient:
         self,
         requests: List[Dict[str, Any]],
         model: str,
-        **kwargs: Dict[str, any],
+        **kwargs: Dict[str, Any],
     ) -> List[Union[ModelResponse, Exception]]:
         """
         Executes parallel stateless batch requests with high throughput.
@@ -327,7 +327,7 @@ class LLMClient:
         system_prompt: Optional[str] = "",
         img: Optional[Path | List[Path] | bytes | List[bytes]] = None,
         stream: bool = True,
-        **kwargs: Dict[str, any],
+        **kwargs: Dict[str, Any],
     ) -> Iterator[str] | ChatCompletion:
         """
         Stateful chat wrapper around `api_query` to maintain and update conversation history.
