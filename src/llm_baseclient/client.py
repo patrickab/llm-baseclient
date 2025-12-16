@@ -110,7 +110,7 @@ class LLMClient:
             model_id = model_input.replace("tabby/", "")
             url = f"http://localhost:{TABBY_PORT}/v1/"
             provider = "openai"  # Tabby uses OpenAI-compatible API.
-        else: # Commercial provider via LiteLLM
+        else:  # Commercial provider via LiteLLM
             model_id = model_input
             url = None
             provider = None
@@ -196,7 +196,6 @@ class LLMClient:
         system_prompt: Optional[str] = None,
         img: Optional[Path | List[Path] | bytes | List[bytes]] = None,
         stream: bool = False,
-        vllm_cmd: Optional[str] = None,
         **kwargs: Dict[str, any],
     ) -> Iterator[str] | ChatCompletion:
         """
@@ -212,7 +211,6 @@ class LLMClient:
             img: Optional image input(s) as file paths, raw bytes, or a list of these.
             stream: If True, returns an iterator yielding chunks of the response.
                     If False, returns a complete ChatCompletion object.
-            vllm_cmd: Customize server startup behavior
             **kwargs: Additional keyword arguments passed directly to the LiteLLM `completion` call
                       (e.g., `temperature`, `top_p`, `max_tokens`).
 
@@ -235,9 +233,10 @@ class LLMClient:
         # other models use environment variables or no auth
         if "tabby/" in model and "api_key" not in kwargs:
             kwargs["api_key"] = "tabby-dummy-key"
-            tabby_config = kwargs.pop("tabby_config", None)
-        else:
-            tabby_config = None
+
+        # Intercept optional kwargs
+        vllm_cmd = kwargs.pop("vllm_cmd", None)
+        tabby_config = kwargs.pop("tabby_config", None)
 
         model_id, api_base, custom_llm_provider = self._resolve_routing(model, vllm_cmd=vllm_cmd, tabby_config=tabby_config)
         try:
@@ -276,7 +275,6 @@ class LLMClient:
         self,
         requests: List[Dict[str, Any]],
         model: str,
-        vllm_cmd: Optional[str] = None,
         **kwargs: Dict[str, any],
     ) -> List[Union[ModelResponse, Exception]]:
         """
@@ -304,6 +302,10 @@ class LLMClient:
             for req in requests
         ]
 
+
+        # Intercept optional kwargs
+        vllm_cmd = kwargs.pop("vllm_cmd", None)
+
         # 2. Execute Parallel Batch (IO-bound)
         model_id, api_base, custom_llm_provider = self._resolve_routing(model, vllm_cmd=vllm_cmd)
 
@@ -325,7 +327,6 @@ class LLMClient:
         system_prompt: Optional[str] = "",
         img: Optional[Path | List[Path] | bytes | List[bytes]] = None,
         stream: bool = True,
-        vllm_cmd: Optional[str] = None,
         **kwargs: Dict[str, any],
     ) -> Iterator[str] | ChatCompletion:
         """
@@ -337,7 +338,6 @@ class LLMClient:
             system_prompt: An optional system-level instruction for the model.
             img: Optional image input(s) for multimodal messages.
             stream: If True, streams the response. If False, returns the complete response.
-            vllm_cmd: Customize vLLM server startup behavior
             **kwargs: Additional keyword arguments passed to `api_query`.
 
         Returns:
@@ -351,7 +351,6 @@ class LLMClient:
             system_prompt=system_prompt,
             img=img,
             stream=stream,
-            vllm_cmd=vllm_cmd,
             **kwargs,
         )
 
