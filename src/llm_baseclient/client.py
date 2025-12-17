@@ -20,7 +20,7 @@ from llm_baseclient.config import MAX_PARALLEL_REQUESTS, OLLAMA_PORT, TABBY_PORT
 from llm_baseclient.local_server_manager import _LocalServerManager
 from llm_baseclient.logger import get_logger
 
-logger= get_logger()
+logger = get_logger()
 
 
 # ----------------------------------- Client ---------------------------------- #
@@ -226,7 +226,7 @@ class LLMClient:
         )
 
         # tabby does not support reasoning
-        reasoning_effort = kwargs.pop("reasoning_effort", "standard")
+        reasoning_effort = kwargs.pop("reasoning_effort", None)
         reasoning_effort = None if "tabby/" in model else reasoning_effort
 
         # dummy api key for openai-compatibility
@@ -268,10 +268,9 @@ class LLMClient:
                                 return
 
                 return stream_generator()
-        except Exception:
-            logger.error("Error during API query", stacklevel=2)
+        except Exception as e:
+            logger.error("Error during API query: %s", e, stacklevel=2)
             return Exception("API query failed")
-
 
     def batch_api_query(
         self,
@@ -303,7 +302,6 @@ class LLMClient:
             )
             for req in requests
         ]
-
 
         # Intercept optional kwargs
         vllm_cmd = kwargs.pop("vllm_cmd", None)
@@ -357,8 +355,14 @@ class LLMClient:
         )
 
         if stream is False:
+            api_response: ChatCompletion
+            msg = api_response.choices[0].message
+
             self.messages.append({"role": "user", "content": user_msg})
-            self.messages.append({"role": "assistant", "content": api_response.choices[0].message.content})
+            if msg.tool_calls:
+                self.messages.append(msg.model_dump())
+            else:
+                self.messages.append({"role": "assistant", "content": msg.content})
             return api_response
 
         def _chat_generator() -> Iterator[str]:
@@ -376,6 +380,10 @@ class LLMClient:
             self.messages.append({"role": "assistant", "content": full_response_text})
 
         return _chat_generator()
+
+    def add_tool_result(self, tool_call_id: str, output: str) -> None:
+        """Injects a tool execution result into the history."""
+        self.messages.append({"role": "tool", "tool_call_id": tool_call_id, "content": str(output)})
 
     # ----------------------------------- Cleanup ---------------------------------- #
     def kill_inference_engines(self) -> None:
