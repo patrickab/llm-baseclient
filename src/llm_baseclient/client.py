@@ -9,16 +9,19 @@ Supports multimodal inputs (images via paths, bytes, data URIs, URLs) - voice co
 import base64
 from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional, Tuple, Union
+import uuid
 
 import filetype
 from litellm import batch_completion, completion, embedding
 from litellm.types.utils import ModelResponse
 from litellm.utils import EmbeddingResponse
 from openai.types.chat import ChatCompletion
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 
 from llm_baseclient.config import MAX_PARALLEL_REQUESTS, OLLAMA_PORT, TABBY_PORT, VLLM_PORT
 from llm_baseclient.local_server_manager import _LocalServerManager
 from llm_baseclient.logger import get_logger
+from llm_baseclient.telemetry import with_telemetry, telemetry_collector
 
 logger = get_logger()
 
@@ -159,6 +162,12 @@ class LLMClient:
         return messages
 
     # -------------------------------- Core LLM Interaction -------------------------------- #
+    @with_telemetry("embedding")
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=4, max=10),
+        retry=retry_if_exception_type((Exception,))
+    )
     def get_embedding(
         self, model: str, input_text: Union[str, List[str]], vllm_cmd: Optional[str] = None, **model_kwargs: Dict[str, any]
     ) -> EmbeddingResponse:
@@ -188,6 +197,12 @@ class LLMClient:
         )
         return response
 
+    @with_telemetry("completion")
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=4, max=10),
+        retry=retry_if_exception_type((Exception,))
+    )
     def api_query(
         self,
         model: str,
@@ -270,8 +285,14 @@ class LLMClient:
                 return stream_generator()
         except Exception as e:
             logger.error("Error during API query: %s", e, stacklevel=2)
-            return Exception("API query failed")
+            raise Exception("API query failed") from e
 
+    @with_telemetry("batch_completion")
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=4, max=10),
+        retry=retry_if_exception_type((Exception,))
+    )
     def batch_api_query(
         self,
         requests: List[Dict[str, Any]],
@@ -320,6 +341,7 @@ class LLMClient:
 
         return responses
 
+    @with_telemetry("chat")
     def chat(
         self,
         model: str,
