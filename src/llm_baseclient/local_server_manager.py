@@ -189,14 +189,15 @@ class _LocalServerManager:
         )
 
         # Configure model
-        payload = {
-            "model_name": model_name,
-            "max_seq_len": tabby_config["max_seq_len"],
-            "cache_mode": tabby_config["cache_mode"],
-        }
+        if tabby_config is not None and model_name is not None:
+            payload = {
+                "model_name": model_name,
+                "max_seq_len": tabby_config["max_seq_len"],
+                "cache_mode": tabby_config["cache_mode"],
+            }
 
-        response = requests.post(
-            f"http://localhost:{TABBY_PORT}/v1/model/load",
-            json=payload,
-        )
-        response.raise_for_status()
+            response = requests.post(
+                f"http://localhost:{TABBY_PORT}/v1/model/load",
+                json=payload,
+            )
+            response.raise_for_status()

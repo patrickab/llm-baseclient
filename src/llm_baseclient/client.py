@@ -227,12 +227,12 @@ class LLMClient:
 
         # tabby does not support reasoning
         reasoning_effort = kwargs.pop("reasoning_effort", None)
-        reasoning_effort = None if "tabby/" in model else reasoning_effort
-
-        # dummy api key for openai-compatibility
-        # other models use environment variables or no auth
-        if "tabby/" in model and "api_key" not in kwargs:
-            kwargs["api_key"] = "tabby-dummy-key"
+        if "tabby/" in model:
+            reasoning_effort = None
+            # dummy api key for openai-compatibility
+            # other models use environment variables or no auth
+            if "api_key" not in kwargs:
+                kwargs["api_key"] = "tabby-dummy-key"
 
         # Intercept optional kwargs
         vllm_cmd = kwargs.pop("vllm_cmd", None)
