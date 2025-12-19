@@ -7,8 +7,11 @@ Supports multimodal inputs (images via paths, bytes, data URIs, URLs) - voice co
 """
 
 import base64
+import hashlib
+import json
+import os
 from pathlib import Path
-from typing import Any, Dict, Iterator, List, Optional, Tuple, Union
+from typing import Any, Dict, Iterator, List, Optional, Tuple, Union, TypeVar, Type
 import uuid
 
 import filetype
@@ -17,7 +20,8 @@ from litellm.exceptions import APIConnectionError, APIError, RateLimitError, Ser
 from litellm.types.utils import ModelResponse
 from litellm.utils import EmbeddingResponse
 from openai.types.chat import ChatCompletion
-from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
+from tenacity import retry, stop_after_attempt, wait_exponential_jitter, retry_if_exception_type
+from pydantic import BaseModel
 
 from llm_baseclient.config import MAX_PARALLEL_REQUESTS, OLLAMA_PORT, TABBY_PORT, VLLM_PORT
 from llm_baseclient.local_server_manager import _LocalServerManager
@@ -26,6 +30,7 @@ from llm_baseclient.telemetry import with_telemetry, telemetry_collector
 
 logger = get_logger()
 
+T = TypeVar('T', bound=BaseModel)
 
 # ----------------------------------- Client ---------------------------------- #
 class LLMClient:
@@ -55,7 +60,7 @@ class LLMClient:
             (4) web URLs
     """
 
-    def __init__(self) -> None:
+    def __init__(self, cache_dir: str = "~/.llm_cache") -> None:
         """
         Initializes the LLMClient with an empty message history, an empty system prompt,
         and a _LocalServerManager for handling local inference servers.
@@ -166,7 +171,7 @@ class LLMClient:
     @with_telemetry("embedding")
     @retry(
         stop=stop_after_attempt(3),
-        wait=wait_exponential(multiplier=1, min=4, max=10),
+        wait=wait_exponential_jitter(initial=1, max=10, exp_base=2),
         retry=retry_if_exception_type((RateLimitError, APIConnectionError, APIError, ServiceUnavailableError, TimeoutError)),
         reraise=True
     )
@@ -202,7 +207,7 @@ class LLMClient:
     @with_telemetry("completion")
     @retry(
         stop=stop_after_attempt(3),
-        wait=wait_exponential(multiplier=1, min=4, max=10),
+        wait=wait_exponential_jitter(initial=1, max=10, exp_base=2),
         retry=retry_if_exception_type((RateLimitError, APIConnectionError, APIError, ServiceUnavailableError, TimeoutError)),
         reraise=True
     )
@@ -293,7 +298,7 @@ class LLMClient:
     @with_telemetry("batch_completion")
     @retry(
         stop=stop_after_attempt(3),
-        wait=wait_exponential(multiplier=1, min=4, max=10),
+        wait=wait_exponential_jitter(initial=1, max=10, exp_base=2),
         retry=retry_if_exception_type((RateLimitError, APIConnectionError, APIError, ServiceUnavailableError, TimeoutError)),
         reraise=True
     )
@@ -406,6 +411,60 @@ class LLMClient:
             self.messages.append({"role": "assistant", "content": full_response_text})
 
         return _chat_generator()
+
+    def structured_output(
+        self,
+        model: str,
+        user_msg: str,
+        response_model: Type[T],
+        system_prompt: Optional[str] = None,
+        **kwargs: Dict[str, Any],
+    ) -> T:
+        """
+        Generate structured JSON output matching a Pydantic schema.
+        
+        Args:
+            model: Model identifier
+            user_msg: User message
+            response_model: Pydantic model class for validation
+            system_prompt: Optional system prompt
+            **kwargs: Additional arguments for api_query
+            
+        Returns:
+            Validated Pydantic model instance
+        """
+        # Add structured output instruction to system prompt
+        schema_instruction = (
+            f"Respond with JSON matching this schema: {response_model.model_json_schema()}\n"
+            "Only return valid JSON, nothing else."
+        )
+        
+        if system_prompt:
+            system_prompt = f"{system_prompt}\n{schema_instruction}"
+        else:
+            system_prompt = schema_instruction
+            
+        # Add response format to kwargs
+        kwargs["response_format"] = {"type": "json_object"}
+        
+        # Get response
+        response = self.api_query(
+            model=model,
+            user_msg=user_msg,
+            system_prompt=system_prompt,
+            stream=False,
+            **kwargs
+        )
+        
+        # Extract content and parse JSON
+        content = response.choices[0].message.content
+        try:
+            data = json.loads(content)
+            return response_model(**data)
+        except json.JSONDecodeError as e:
+            raise ValueError(f"Failed to parse JSON response: {content}") from e
+        except Exception as e:
+            raise ValueError(f"Failed to validate response schema: {e}") from e
 
     def add_tool_result(self, tool_call_id: str, output: str) -> None:
         """Injects a tool execution result into the history."""
