@@ -13,6 +13,7 @@ import uuid
 
 import filetype
 from litellm import batch_completion, completion, embedding
+from litellm.exceptions import APIConnectionError, APIError, RateLimitError, ServiceUnavailableError, TimeoutError
 from litellm.types.utils import ModelResponse
 from litellm.utils import EmbeddingResponse
 from openai.types.chat import ChatCompletion
@@ -166,7 +167,8 @@ class LLMClient:
     @retry(
         stop=stop_after_attempt(3),
         wait=wait_exponential(multiplier=1, min=4, max=10),
-        retry=retry_if_exception_type((Exception,))
+        retry=retry_if_exception_type((RateLimitError, APIConnectionError, APIError, ServiceUnavailableError, TimeoutError)),
+        reraise=True
     )
     def get_embedding(
         self, model: str, input_text: Union[str, List[str]], vllm_cmd: Optional[str] = None, **model_kwargs: Dict[str, any]
@@ -201,7 +203,8 @@ class LLMClient:
     @retry(
         stop=stop_after_attempt(3),
         wait=wait_exponential(multiplier=1, min=4, max=10),
-        retry=retry_if_exception_type((Exception,))
+        retry=retry_if_exception_type((RateLimitError, APIConnectionError, APIError, ServiceUnavailableError, TimeoutError)),
+        reraise=True
     )
     def api_query(
         self,
@@ -291,7 +294,8 @@ class LLMClient:
     @retry(
         stop=stop_after_attempt(3),
         wait=wait_exponential(multiplier=1, min=4, max=10),
-        retry=retry_if_exception_type((Exception,))
+        retry=retry_if_exception_type((RateLimitError, APIConnectionError, APIError, ServiceUnavailableError, TimeoutError)),
+        reraise=True
     )
     def batch_api_query(
         self,
