@@ -2,20 +2,14 @@
 
 A Python LLM client based on [LiteLLM](https://www.litellm.ai/) with multimodal support that unifies access to 2100+ models from 100+ providers, with automatic CPU/GPU local inference server management.
 
-## Why This Exists
-
-This project eliminates that friction by exposing a single API that routes transparently to whatever backend you pick—commercial APIs, vLLM, or Ollama.
-The local inference part matters more than it sounds. Running models locally requires spawning servers, health-checking them, managing GPU memory, and handling cleanup. This library handles all of that automatically.
+Exposes vLLM/Ollama/OpenAI/Claude/Gemini as simplified Python API.
 
 ## Use Cases
 
 - **Multi-provider evaluation**: Benchmark same prompt across OpenAI, Anthropic, open-source models without rewriting logic
-- **Cost optimization**: Start with cheap cloud APIs, switch to local inference when volume justifies GPU investment
 - **Image analysis at scale**: Process hundreds of images in parallel with automatic VRAM management
-- **Local-first RAG**: Build retrieval pipelines that never send data to external APIs
-- **Embedded ML**: Package LLM inference with your application using local models only
 
-## What You Can Do
+## Usage
 
 **Route requests transparently across providers:**
 
@@ -82,27 +76,6 @@ See `src/examples/llm-client.py` for detailled usage examples with explanations.
 
 **Process-level server management**: vLLM and Ollama servers run as separate processes. No containerization, Docker, or distributed setup out of the box.
 
-**Streaming is text-only**: Streaming responses work, but multimodal batch processing returns complete responses only (not token-by-token).
-
-**Error handling is basic**: Image processing failures, malformed model identifiers, or server startup issues produce exceptions you must catch. No automatic error recovery.
-
-## Installation
-
-```bash
-# Base installation (LiteLLM + multimodal support only)
-pip install llm-baseclient
-
-# With vLLM for local inference
-pip install "llm-baseclient[vllm]"
-
-# With dev tools
-pip install "llm-baseclient[dev]"
-
-# Everything
-pip install "llm-baseclient[all]"
-```
-
-For Ollama, install separately from https://ollama.com.
 
 ## Quick Start
 
@@ -143,8 +116,6 @@ The library wraps LiteLLM for actual API calls, adding local server automation a
 ## Scope
 
 This is a **client library**, not a deployment framework. It assumes:
-- You've already installed vLLM/Ollama locally, or have API credentials for cloud providers
-- You handle authentication (env vars follow LiteLLM conventions: `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, etc.)
+- Local installation of vLLM/Ollama, or API credentials for cloud providers
+- Authentication via env vars following LiteLLM conventions: (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, etc.)
 - GPU memory and model downloading are pre-configured
-- You want a Python API, not a REST server (for that, use vLLM's built-in API directly)
-See LICENSE file.
