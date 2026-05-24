@@ -21,7 +21,7 @@ from openai.types.chat import ChatCompletion
 from PIL import Image
 import requests
 
-from llm_baseclient.config import MAX_PARALLEL_REQUESTS, OLLAMA_PORT, SYS_NOTE_TO_OBSIDIAN_YAML, TABBY_PORT, VLLM_PORT
+from llm_baseclient.config import MAX_PARALLEL_REQUESTS, OLLAMA_PORT, SYS_NOTE_TO_OBSIDIAN_YAML, TABBY_PORT, VLLM_PORT, ModelConfigs
 from llm_baseclient.local_server_manager import _LocalServerManager
 from llm_baseclient.logger import get_logger
 
@@ -56,17 +56,27 @@ class LLMClient:
             (4) web URLs
     """
 
-    def __init__(self) -> None:
+    def __init__(self, model_configs: ModelConfigs | None = None) -> None:
         """
         Initializes the LLMClient with an empty message history, an empty system prompt,
         and a _LocalServerManager for handling local inference servers.
+
+        Args:
+            model_configs: Optional per-model configurations for vLLM and ExLlama backends.
         """
-        # Stores conversation history as a list of (role, message) tuples.
-        # Only text content is stored for efficiency; multimodal inputs are processed on-the-fly.
         self.messages: List[Dict[str, str]] = []
+        self.model_configs = model_configs or {}
         self.server_manager = _LocalServerManager()
 
     # ----------------------------------- Data Wrangling ---------------------------------- #
+    def _lookup_model_config(self, model: str) -> tuple[str | None, dict[str, Any] | None]:
+        """Returns (vllm_cmd_list, tabby_config) from stored model_configs for the given model."""
+        vcc = self.model_configs.get("vllm", {})
+        ecc = self.model_configs.get("exllama", {})
+        vllm_cmd = vcc.get(model, {}).get("vllm_cmd")
+        tabby_config = ecc.get(model)
+        return vllm_cmd.split() if vllm_cmd else None, tabby_config
+
     def _process_image(self, img: Union[Path, bytes, str]) -> str:
         """Standardizes image inputs (Path, bytes, or data-URI) into a Base64 data URI or passes URL."""
 
@@ -239,9 +249,11 @@ class LLMClient:
         if "tabby/" in model and "api_key" not in kwargs:
             kwargs["api_key"] = "tabby-dummy-key"
 
-        # Intercept optional kwargs
+        # Intercept optional kwargs — explicit kwargs override model_configs
         vllm_cmd = kwargs.pop("vllm_cmd", None)
         tabby_config = kwargs.pop("tabby_config", None)
+        if not vllm_cmd and not tabby_config:
+            vllm_cmd, tabby_config = self._lookup_model_config(model)
 
         model_id, api_base, custom_llm_provider = self._resolve_routing(model, vllm_cmd=vllm_cmd, tabby_config=tabby_config)
         try:
@@ -308,8 +320,10 @@ class LLMClient:
             for req in requests
         ]
 
-        # Intercept optional kwargs
+        # Intercept optional kwargs — explicit kwargs override model_configs
         vllm_cmd = kwargs.pop("vllm_cmd", None)
+        if not vllm_cmd:
+            vllm_cmd, _ = self._lookup_model_config(model)
 
         # 2. Execute Parallel Batch (IO-bound)
         model_id, api_base, custom_llm_provider = self._resolve_routing(model, vllm_cmd=vllm_cmd)

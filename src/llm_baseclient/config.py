@@ -1,6 +1,7 @@
 import os
 from pathlib import Path
 import subprocess
+from typing import TypedDict
 
 OLLAMA_PORT = 11434
 
@@ -13,6 +14,21 @@ VLLM_GPU_UTIL = 0.8  # Limit vLLM to 0,x% VRAM so local machine doesn't freeze
 
 MAX_PARALLEL_REQUESTS = 100  # For batch processing - adjust to system/provider limits
 MAX_TOKEN_DEFAULT_VLLM = 8192  # Maximum context length - lower/increase to your GPU/CPU/Model requirements
+
+
+# --- Model Configuration Types ---
+class VllmConfig(TypedDict, total=False):
+    vllm_cmd: str
+
+
+class ExllamaConfig(TypedDict):
+    max_seq_len: int
+    cache_mode: str
+
+
+class ModelConfigs(TypedDict, total=False):
+    vllm: dict[str, VllmConfig]
+    exllama: dict[str, ExllamaConfig]
 
 
 def vllm_default_command(model_name: str) -> list[str]:
