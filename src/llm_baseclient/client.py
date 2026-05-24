@@ -7,8 +7,8 @@ Supports multimodal inputs (images via paths, bytes, data URIs, URLs) - voice co
 """
 
 import base64
-import csv
 import io
+import json
 import math
 from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional, Tuple, Union
@@ -392,17 +392,13 @@ class LLMClient:
 
     # ----------------------------------- History Management ---------------------------------- #
     def store_history(self, file_path: Union[str, Path]) -> None:
-        """Store message history to filesystem as CSV."""
-        with Path(file_path).open("w", newline="", encoding="utf-8") as f:
-            writer = csv.writer(f)
-            writer.writerow(["role", "content"])
-            writer.writerows([msg.get("role", ""), msg.get("content", "")] for msg in self.messages)
+        """Store message history to filesystem as JSON."""
+        Path(file_path).write_text(json.dumps(self.messages, indent=2), encoding="utf-8")
 
     def load_history(self, file_path: Union[str, Path]) -> None:
-        """Load message history from CSV filesystem."""
+        """Load message history from JSON filesystem."""
         if (p := Path(file_path)).exists():
-            with p.open("r", newline="", encoding="utf-8") as f:
-                self.messages = [{"role": row["role"], "content": row["content"]} for row in csv.DictReader(f)]
+            self.messages = json.loads(p.read_text(encoding="utf-8"))
 
     def reset_history(self) -> None:
         """Clear the current conversation history."""
