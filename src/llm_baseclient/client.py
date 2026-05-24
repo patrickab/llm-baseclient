@@ -7,6 +7,8 @@ Supports multimodal inputs (images via paths, bytes, data URIs, URLs) - voice co
 """
 
 import base64
+import io
+import math
 from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional, Tuple, Union
 
@@ -15,6 +17,8 @@ from litellm import batch_completion, completion, embedding
 from litellm.types.utils import ModelResponse
 from litellm.utils import EmbeddingResponse
 from openai.types.chat import ChatCompletion
+from PIL import Image
+import requests
 
 from llm_baseclient.config import MAX_PARALLEL_REQUESTS, OLLAMA_PORT, TABBY_PORT, VLLM_PORT
 from llm_baseclient.local_server_manager import _LocalServerManager
@@ -389,3 +393,80 @@ class LLMClient:
     def kill_inference_engines(self) -> None:
         """Cleans up any background processes."""
         self.server_manager._kill_inference_engines(targets={"vllm", "ollama", "ollama runner", "tabby"})
+
+    # ----------------------------------- Image Utilities ---------------------------------- #
+    @staticmethod
+    def downscale_img(
+        img: Union[str, bytes, Path, Image.Image],
+        max_tokens: int,
+        grid_size: int = 28,
+        tokens_per_patch: int = 1,
+        row_overhead_tokens: int = 1,
+        output_format: str = "JPEG",
+        quality: int = 85,
+    ) -> str:
+        """
+        Preserves aspect ratio (area-scaling) and aligns to ViT patches (grid_size) for spatial accuracy.
+        Optimizes GPU inference efficiency within token budget.
+
+        JPEG: Fastest TTFT (optimized CPU decoding).
+        PNG: Max fidelity (lossless).
+        """
+        # 1. Normalize Input to PIL Image
+        if isinstance(img, Image.Image):
+            pass
+        elif hasattr(img, "image_data"):  # Streamlit PasteResult (if passed directly)
+            img = img.image_data  # type: ignore
+            if not isinstance(img, Image.Image):
+                raise ValueError("Invalid image type from PasteResult.")
+        elif isinstance(img, (str, Path)):
+            src = str(img)
+            if src.startswith("http"):
+                img = Image.open(io.BytesIO(requests.get(src, timeout=10).content))
+            elif src.startswith("data:image"):
+                img = Image.open(io.BytesIO(base64.b64decode(src.partition(",")[-1])))
+            else:
+                img = Image.open(Path(src))
+        else:
+            img = Image.open(io.BytesIO(img) if isinstance(img, bytes) else img)
+
+        # 2. Universal Resizing Logic
+        def get_tokens(w: int, h: int) -> int:
+            pw, ph = math.ceil(w / grid_size), math.ceil(h / grid_size)
+            return (pw * ph * tokens_per_patch) + (ph * row_overhead_tokens)
+
+        w, h = img.size
+        curr_tokens = get_tokens(w, h)
+
+        scale = 1.0
+        if curr_tokens > max_tokens:
+            scale = math.sqrt(max_tokens / curr_tokens)
+
+        # Snap to Grid (Preserving Aspect Ratio)
+        fw = max(grid_size, round((w * scale) / grid_size) * grid_size)
+        fh = max(grid_size, round((h * scale) / grid_size) * grid_size)
+
+        # Iterative refinement to guarantee budget compliance
+        while get_tokens(fw, fh) > max_tokens and (fw > grid_size or fh > grid_size):
+            if fw > fh:
+                fw -= grid_size
+            else:
+                fh -= grid_size
+
+        if (fw, fh) != (w, h):
+            img = img.resize((fw, fh), Image.Resampling.LANCZOS)
+
+        # 3. Configurable Encoding (Optimized for Localhost)
+        if output_format.upper() in ["JPEG", "JPG"]:
+            if img.mode != "RGB":
+                img = img.convert("RGB")
+            save_params = {"quality": quality, "optimize": False}
+        elif output_format.upper() == "PNG":
+            save_params = {"optimize": False}
+        else:
+            save_params = {"quality": quality}
+
+        buf = io.BytesIO()
+        img.save(buf, format=output_format, **save_params)
+        b64 = base64.b64encode(buf.getvalue()).decode("utf-8")
+        return f"data:image/{output_format.lower()};base64,{b64}"
