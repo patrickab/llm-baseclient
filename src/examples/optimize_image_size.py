@@ -136,11 +136,11 @@ print(f"Reduction:       {100 - (result['optimized_tokens'] / result['original_t
 
 # %%
 # Display original image
-#headers = {
+# headers = {
 #    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-#}
-#original_img = Image.open(io.BytesIO(requests.get(TEST_URL, headers=headers).content))
-#original_img.show()
+# }
+# original_img = Image.open(io.BytesIO(requests.get(TEST_URL, headers=headers).content))
+# original_img.show()
 
 # %%
 # Display optimized image

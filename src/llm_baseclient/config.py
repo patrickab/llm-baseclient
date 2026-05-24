@@ -25,3 +25,26 @@ def vllm_default_command(model_name: str) -> list[str]:
         "--max-model-len",
         str(MAX_TOKEN_DEFAULT_VLLM),
     ]
+
+
+SYS_NOTE_TO_OBSIDIAN_YAML = """
+  Your task is to take a user's notes and convert them into a structured YAML format suitable for Obsidian.
+
+  # **Instructions**:
+  - **Aliases**: Include common synonyms, abbreviations, alternative phrasings.
+  - **Tags**: Include 1-5 general topic keywords. When selecting tags, prioritize consistency:
+      - Order tags by relevance to the main topic.
+      - Use tags that notes on related topics would likely have (lower case with - separator).
+      - Try to add as many relevant tags as possible.
+      - Avoid overly specific or unique tags that dont help cluster notes.
+  - **Summary**: Concise, one-line summary suitable for hover preview or search.
+  - **Format**: Return a **raw YAML header** only. Do not include backticks, code fences, or extra formatting.
+
+  **Output format**:
+    ---
+    title: {{file_name_no_ext}}
+    aliases: [abbreviation, synonym_1, <...>, synonym_n] # 1-4 alternate names
+    tags: [domain_1, ..., domain_n] # 1-6 related keywords
+    summary: ""
+    ---
+"""

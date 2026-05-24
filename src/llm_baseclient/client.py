@@ -20,7 +20,7 @@ from openai.types.chat import ChatCompletion
 from PIL import Image
 import requests
 
-from llm_baseclient.config import MAX_PARALLEL_REQUESTS, OLLAMA_PORT, TABBY_PORT, VLLM_PORT
+from llm_baseclient.config import MAX_PARALLEL_REQUESTS, OLLAMA_PORT, SYS_NOTE_TO_OBSIDIAN_YAML, TABBY_PORT, VLLM_PORT
 from llm_baseclient.local_server_manager import _LocalServerManager
 from llm_baseclient.logger import get_logger
 
@@ -395,6 +395,34 @@ class LLMClient:
         self.server_manager._kill_inference_engines(targets={"vllm", "ollama", "ollama runner", "tabby"})
 
     # ----------------------------------- Image Utilities ---------------------------------- #
+    @staticmethod
+    def write_to_md(file_path: Path, message: str) -> None:
+        """Writes a simple text message to a markdown file."""
+        file_path.parent.mkdir(parents=True, exist_ok=True)
+        file_path.write_text(message, encoding="utf-8")
+
+    def write_to_obsidian(
+        self,
+        file_path: Path,
+        message: str,
+        model: str,
+        **kwargs: Dict[str, Any],
+    ) -> None:
+        """
+        Writes a message to a markdown file, prepending an AI-generated YAML frontmatter block suitable for Obsidian.
+
+        Args:
+            file_path: The pathlib Path where the markdown file should be written.
+            message: The content to write.
+            model: The LLM model used for generating the header.
+            **kwargs: Additional parameters passed to the model (e.g., temperature).
+        """
+        system_prompt = SYS_NOTE_TO_OBSIDIAN_YAML.replace("{{file_name_no_ext}}", file_path.stem).replace("{{user_notes}}", message)
+        response: ChatCompletion = self.api_query(model=model, user_msg=message, system_prompt=system_prompt, stream=False, **kwargs)
+        yaml_header = response.choices[0].message.content
+
+        self.write_to_md(file_path, f"{yaml_header}\n{message}")
+
     @staticmethod
     def downscale_img(
         img: Union[str, bytes, Path, Image.Image],

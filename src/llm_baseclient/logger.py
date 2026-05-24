@@ -20,14 +20,14 @@ def get_logger() -> Logger:
 
     rich_handler = RichHandler(
         console=console,
-        show_time=True,          # Display timestamp
-        show_level=True,         # Display log level
-        show_path=True,          # Display file and line number
-        enable_link_path=True,   # Make file paths clickable in supported terminals
-        markup=True,             # Allow rich markup in log messages (e.g., [bold red]Error![/bold red])
-        rich_tracebacks=True,    # Use rich's beautiful tracebacks for exceptions
-        tracebacks_show_locals=True, # Show local variables in tracebacks
-        tracebacks_word_wrap=True, # Wrap long lines in tracebacks
+        show_time=True,  # Display timestamp
+        show_level=True,  # Display log level
+        show_path=True,  # Display file and line number
+        enable_link_path=True,  # Make file paths clickable in supported terminals
+        markup=True,  # Allow rich markup in log messages (e.g., [bold red]Error![/bold red])
+        rich_tracebacks=True,  # Use rich's beautiful tracebacks for exceptions
+        tracebacks_show_locals=True,  # Show local variables in tracebacks
+        tracebacks_word_wrap=True,  # Wrap long lines in tracebacks
     )
 
     logger.addHandler(rich_handler)
@@ -43,7 +43,7 @@ if __name__ == "__main__":
     logger.warning("Configuration file '[yellow]settings.ini[/yellow]' not found.")
     logger.info("Visit https://example.com for more information.")
 
-    def divide_by_zero(): # noqa
+    def divide_by_zero():  # noqa
         a = 10
         b = 0
         logger.debug(f"Attempting division: {a} / {b}")
