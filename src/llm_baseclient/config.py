@@ -1,4 +1,6 @@
 import os
+from pathlib import Path
+import subprocess
 
 OLLAMA_PORT = 11434
 
@@ -25,6 +27,57 @@ def vllm_default_command(model_name: str) -> list[str]:
         "--max-model-len",
         str(MAX_TOKEN_DEFAULT_VLLM),
     ]
+
+
+# --- Static Model Definitions ---
+MODELS_GEMINI = [
+    "gemini/gemini-3-flash-preview",
+    "gemini/gemini-3.1-flash-lite-preview",
+    "gemini/gemini-3.1-pro-preview",
+]
+
+MODELS_OPENAI = [
+    "openai/gpt-5.1",
+    "openai/o1",
+    "openai/gpt-5-mini",
+    "openai/gpt-4o",
+]
+
+# --- Dynamic Discovery: Ollama ---
+MODELS_OLLAMA: list[str] = []
+try:
+    res = subprocess.run(["ollama", "list"], capture_output=True, text=True, check=True)
+    MODELS_OLLAMA = [f"ollama/{line.split()[0]}" for line in res.stdout.splitlines()[1:]]
+except (FileNotFoundError, subprocess.CalledProcessError):
+    pass
+
+# --- Dynamic Discovery: VLLM (HuggingFace) ---
+_HUGGINGFACE_DIR = Path.home() / ".cache" / "huggingface" / "hub"
+MODELS_VLLM: list[str] = (
+    [
+        f"hosted_vllm/{m.name.replace('models--', '', 1).replace('--', '/', 1)}"
+        for m in _HUGGINGFACE_DIR.iterdir()
+        if m.name.startswith("models--")
+    ]
+    if _HUGGINGFACE_DIR.exists()
+    else []
+)
+
+# --- Dynamic Discovery: TabbyAPI ---
+_tabby_models_dir = Path.home() / "tabbyAPI" / "models"
+MODELS_EXLLAMA: list[str] = (
+    [f"tabby/{m.name}" for m in _tabby_models_dir.iterdir() if m.name != "place_your_models_here.txt"]
+    if _tabby_models_dir.exists()
+    else []
+)
+
+AVAILABLE_MODELS = (
+    (MODELS_GEMINI if os.getenv("GEMINI_API_KEY") else [])
+    + (MODELS_OPENAI if os.getenv("OPENAI_API_KEY") else [])
+    + [m for m in MODELS_OLLAMA if m != "ollama/embeddinggemma:300m"]
+    + MODELS_VLLM
+    + MODELS_EXLLAMA
+)
 
 
 SYS_NOTE_TO_OBSIDIAN_YAML = """
