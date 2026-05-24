@@ -7,6 +7,7 @@ Supports multimodal inputs (images via paths, bytes, data URIs, URLs) - voice co
 """
 
 import base64
+import csv
 import io
 import math
 from pathlib import Path
@@ -388,6 +389,24 @@ class LLMClient:
     def add_tool_result(self, tool_call_id: str, output: str) -> None:
         """Injects a tool execution result into the history."""
         self.messages.append({"role": "tool", "tool_call_id": tool_call_id, "content": str(output)})
+
+    # ----------------------------------- History Management ---------------------------------- #
+    def store_history(self, file_path: Union[str, Path]) -> None:
+        """Store message history to filesystem as CSV."""
+        with Path(file_path).open("w", newline="", encoding="utf-8") as f:
+            writer = csv.writer(f)
+            writer.writerow(["role", "content"])
+            writer.writerows([msg.get("role", ""), msg.get("content", "")] for msg in self.messages)
+
+    def load_history(self, file_path: Union[str, Path]) -> None:
+        """Load message history from CSV filesystem."""
+        if (p := Path(file_path)).exists():
+            with p.open("r", newline="", encoding="utf-8") as f:
+                self.messages = [{"role": row["role"], "content": row["content"]} for row in csv.DictReader(f)]
+
+    def reset_history(self) -> None:
+        """Clear the current conversation history."""
+        self.messages = []
 
     # ----------------------------------- Cleanup ---------------------------------- #
     def kill_inference_engines(self) -> None:
