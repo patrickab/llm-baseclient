@@ -8,8 +8,6 @@ from rich.traceback import install as install_rich_tracebacks
 
 def get_logger() -> Logger:
     """Set up a logger with RichHandler for enhanced logging output."""
-    install_rich_tracebacks(show_locals=True, suppress=[__file__])
-
     console = Console(stderr=True, highlight=True, log_time_format="[%H.%M]")
 
     logger = logging.getLogger(__name__)
@@ -26,7 +24,7 @@ def get_logger() -> Logger:
         enable_link_path=True,  # Make file paths clickable in supported terminals
         markup=True,  # Allow rich markup in log messages (e.g., [bold red]Error![/bold red])
         rich_tracebacks=True,  # Use rich's beautiful tracebacks for exceptions
-        tracebacks_show_locals=True,  # Show local variables in tracebacks
+        tracebacks_show_locals=False,  # Show local variables in tracebacks
         tracebacks_word_wrap=True,  # Wrap long lines in tracebacks
     )
 
