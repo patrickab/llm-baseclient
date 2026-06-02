@@ -275,14 +275,26 @@ class LLMClient:
                     Generator wrapper to isolate `yield` keyword from outer function scope.
                     Allows the outer function to conditionally return `Iterator[Str] | ChatCompletion`
                     """
+                    in_reasoning = False
                     for chunk in response:
-                        # Extract content from streaming chunks.
-                        content = chunk.choices[0].delta.content
+                        delta = chunk.choices[0].delta
+                        reasoning = getattr(delta, "reasoning_content", None)
+                        content = delta.content
+
+                        if reasoning:
+                            if not in_reasoning:
+                                yield "<thought>\n"
+                                in_reasoning = True
+                            yield reasoning
+
                         if content:
-                            try:
-                                yield content
-                            except GeneratorExit:
-                                return
+                            if in_reasoning:
+                                yield "\n</thought>"
+                                in_reasoning = False
+                            yield content
+
+                    if in_reasoning:
+                        yield "\n</thought>"
 
                 return stream_generator()
         except Exception as e:
@@ -381,7 +393,11 @@ class LLMClient:
             if msg.tool_calls:
                 self.messages.append(msg.model_dump())
             else:
-                self.messages.append({"role": "assistant", "content": msg.content})
+                content = msg.content or ""
+                reasoning = getattr(msg, "reasoning_content", None)
+                if reasoning:
+                    content = f"<thought>\n{reasoning}\n</thought>\n{content}"
+                self.messages.append({"role": "assistant", "content": content})
             return api_response
 
         def _chat_generator() -> Iterator[str]:
