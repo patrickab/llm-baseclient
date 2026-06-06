@@ -211,6 +211,7 @@ class LLMClient:
         system_prompt: Optional[str] = None,
         img: Optional[Path | List[Path] | bytes | List[bytes]] = None,
         stream: bool = False,
+        return_usage: bool = False,
         **kwargs: Dict[str, Any],
     ) -> Iterator[str] | ChatCompletion:
         """
@@ -226,6 +227,9 @@ class LLMClient:
             img: Optional image input(s) as file paths, raw bytes, or a list of these.
             stream: If True, returns an iterator yielding chunks of the response.
                     If False, returns a complete ChatCompletion object.
+            return_usage: If True and streaming, yields a final dict with
+                          ``prompt_tokens``, ``completion_tokens``, ``total_tokens``
+                          after the text stream exhausts.
             **kwargs: Additional keyword arguments passed directly to the LiteLLM `completion` call
                       (e.g., `temperature`, `top_p`, `max_tokens`).
 
@@ -264,6 +268,7 @@ class LLMClient:
                 api_base=api_base,
                 reasoning_effort=reasoning_effort,
                 custom_llm_provider=custom_llm_provider,  # Defaults to None for commercial providers.
+                stream_options={"include_usage": True} if stream else None,
                 **kwargs,  # Passes additional model parameters like temperature, top_p, max_tokens.
             )
             if stream is False:
@@ -276,7 +281,17 @@ class LLMClient:
                     Allows the outer function to conditionally return `Iterator[Str] | ChatCompletion`
                     """
                     in_reasoning = False
+                    last_usage = None
                     for chunk in response:
+                        usage = getattr(chunk, "usage", None)
+                        if usage is not None:
+                            last_usage = {
+                                "prompt_tokens": usage.prompt_tokens,
+                                "completion_tokens": usage.completion_tokens,
+                                "total_tokens": usage.total_tokens,
+                            }
+                            continue
+
                         delta = chunk.choices[0].delta
                         reasoning = getattr(delta, "reasoning_content", None)
                         content = delta.content
@@ -295,6 +310,9 @@ class LLMClient:
 
                     if in_reasoning:
                         yield "\n</thought>"
+
+                    if return_usage and last_usage:
+                        yield last_usage
 
                 return stream_generator()
         except Exception as e:
@@ -358,6 +376,7 @@ class LLMClient:
         system_prompt: Optional[str] = "",
         img: Optional[Path | List[Path] | bytes | List[bytes]] = None,
         stream: bool = True,
+        return_usage: bool = False,
         **kwargs: Dict[str, Any],
     ) -> Iterator[str] | ChatCompletion:
         """
@@ -369,7 +388,9 @@ class LLMClient:
             system_prompt: An optional system-level instruction for the model.
             img: Optional image input(s) for multimodal messages.
             stream: If True, streams the response. If False, returns the complete response.
-            **kwargs: Additional keyword arguments passed to `api_query`.
+            return_usage: If True and streaming, passes through the usage dict from
+                          ``api_query`` as the final yielded element.
+            **kwargs: Additional keyword arguments passed to ``api_query``.
 
         Returns:
             An iterator of strings if `stream` is True, or a ChatCompletion object if `stream` is False.
@@ -382,6 +403,7 @@ class LLMClient:
             system_prompt=system_prompt,
             img=img,
             stream=stream,
+            return_usage=return_usage,
             **kwargs,
         )
 
@@ -407,8 +429,11 @@ class LLMClient:
             """
             full_response_text = ""
             for chunk in api_response:
-                full_response_text += chunk
-                yield chunk
+                if isinstance(chunk, dict):
+                    yield chunk
+                else:
+                    full_response_text += chunk
+                    yield chunk
 
             # Update history after stream finishes
             self.messages.append({"role": "user", "content": user_msg})
