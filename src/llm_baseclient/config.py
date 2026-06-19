@@ -48,8 +48,8 @@ def vllm_default_command(model_name: str) -> list[str]:
 # --- Static Model Definitions ---
 MODELS_GEMINI = (
     [
-        "gemini/gemini-3-flash-preview",
-        "gemini/gemini-3.1-flash-lite-preview",
+        "gemini/gemini-3.5-flash",
+        "gemini/gemini-3.1-flash-lite",
         "gemini/gemini-3.1-pro-preview",
     ]
     if os.getenv("GEMINI_API_KEY")
