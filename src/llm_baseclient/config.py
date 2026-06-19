@@ -46,24 +46,44 @@ def vllm_default_command(model_name: str) -> list[str]:
 
 
 # --- Static Model Definitions ---
-MODELS_GEMINI = [
-    "gemini/gemini-3-flash-preview",
-    "gemini/gemini-3.1-flash-lite-preview",
-    "gemini/gemini-3.1-pro-preview",
-]
+MODELS_GEMINI = (
+    [
+        "gemini/gemini-3-flash-preview",
+        "gemini/gemini-3.1-flash-lite-preview",
+        "gemini/gemini-3.1-pro-preview",
+    ]
+    if os.getenv("GEMINI_API_KEY")
+    else []
+)
 
-MODELS_OPENAI = [
-    "openai/gpt-5.1",
-    "openai/o1",
-    "openai/gpt-5-mini",
-    "openai/gpt-4o",
-]
+MODELS_OPENAI = (
+    [
+        "openai/gpt-5.1",
+        "openai/o1",
+        "openai/gpt-5-mini",
+        "openai/gpt-4o",
+    ]
+    if os.getenv("OPENAI_API_KEY")
+    else []
+)
+
+MODELS_DEEPSEEK = (
+    [
+        "deepseek/deepseek-v4-flash",
+        "deepseek/deepseek-v4-pro",
+    ]
+    if os.getenv("DEEPSEEK_API_KEY")
+    else []
+)
 
 # --- Dynamic Discovery: Ollama ---
 MODELS_OLLAMA: list[str] = []
+MODELS_OLLAMA_EXCLUDED = ["bge-m3", "nomic-embed-text"]
 try:
     res = subprocess.run(["ollama", "list"], capture_output=True, text=True, check=True)
-    MODELS_OLLAMA = [f"ollama/{line.split()[0]}" for line in res.stdout.splitlines()[1:]]
+    lines = res.stdout.splitlines()[1:]
+    models = (line.split()[0] for line in lines)
+    MODELS_OLLAMA = [f"ollama/{model}" for model in models if not any(excluded in model for excluded in MODELS_OLLAMA_EXCLUDED)]
 except (FileNotFoundError, subprocess.CalledProcessError):
     pass
 
@@ -87,13 +107,7 @@ MODELS_EXLLAMA: list[str] = (
     else []
 )
 
-AVAILABLE_MODELS = (
-    (MODELS_GEMINI if os.getenv("GEMINI_API_KEY") else [])
-    + (MODELS_OPENAI if os.getenv("OPENAI_API_KEY") else [])
-    + [m for m in MODELS_OLLAMA if m != "ollama/embeddinggemma:300m"]
-    + MODELS_VLLM
-    + MODELS_EXLLAMA
-)
+AVAILABLE_MODELS = MODELS_GEMINI + MODELS_OPENAI + MODELS_OLLAMA + MODELS_VLLM + MODELS_EXLLAMA
 
 
 SYS_NOTE_TO_OBSIDIAN_YAML = """
