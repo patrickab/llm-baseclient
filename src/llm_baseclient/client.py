@@ -7,11 +7,12 @@ Supports multimodal inputs (images via paths, bytes, data URIs, URLs) - voice co
 """
 
 import base64
+from collections.abc import Iterator
 import io
 import json
 import math
 from pathlib import Path
-from typing import Any, Dict, Iterator, List, Optional, Tuple, Union
+from typing import Any
 
 import filetype
 from litellm import batch_completion, completion, embedding
@@ -61,7 +62,7 @@ class LLMClient:
         Args:
             model_configs: Optional per-model configurations for the vLLM backend.
         """
-        self.messages: List[Dict[str, str]] = []
+        self.messages: list[dict[str, str]] = []
         self.model_configs = model_configs or {}
         self.server_manager = _LocalServerManager()
 
@@ -71,7 +72,7 @@ class LLMClient:
         vllm_cmd = self.model_configs.get("vllm", {}).get(model, {}).get("vllm_cmd")
         return vllm_cmd.split() if vllm_cmd else None
 
-    def _process_image(self, img: Union[Path, bytes, str]) -> str:
+    def _process_image(self, img: Path | bytes | str) -> str:
         """Standardizes image inputs (Path, bytes, or data-URI) into a Base64 data URI or passes URL."""
 
         if isinstance(img, str) and img.startswith(("http://", "https://", "data:image")):
@@ -92,7 +93,7 @@ class LLMClient:
         b64_encoded = base64.b64encode(img).decode("utf-8")
         return f"data:{mime_type};base64,{b64_encoded}"
 
-    def _resolve_routing(self, model_input: str, vllm_cmd: Optional[list[str]] = None) -> Tuple[str, Optional[str], Optional[str]]:
+    def _resolve_routing(self, model_input: str, vllm_cmd: list[str] | None = None) -> tuple[str, str | None, str | None]:
         """
         Parses 'provider/model' and handles local server spawning.
         Returns (model_id, api_base, custom_llm_provider).
@@ -105,28 +106,19 @@ class LLMClient:
 
         if provider == "hosted_vllm":
             self.server_manager.ensure_vllm(model_name, vllm_cmd=vllm_cmd)
-            model_id = model_input
-            url = f"http://localhost:{VLLM_PORT}/v1/models/{model_name}"
-            provider = "hosted_vllm"
-        elif provider == "ollama":
+            return model_input, f"http://localhost:{VLLM_PORT}/v1/models/{model_name}", "hosted_vllm"
+        if provider == "ollama":
             self.server_manager.ensure_ollama(model_name)
-            model_id = model_name
-            url = f"http://localhost:{OLLAMA_PORT}"
-            provider = "ollama"
-        else:  # Commercial provider via LiteLLM
-            model_id = model_input
-            url = None
-            provider = None
-
-        return model_id, url, provider
+            return model_name, f"http://localhost:{OLLAMA_PORT}", "ollama"
+        return model_input, None, None  # Commercial provider via LiteLLM
 
     def _construct_message_payload(
         self,
-        user_msg: Optional[str] = None,
-        user_msg_history: Optional[List[Dict[str, str]]] = None,
-        system_prompt: Optional[str] = None,
-        img: Optional[Path | List[Path] | bytes | List[bytes]] = None,
-    ) -> List[Dict[str, Any]]:
+        user_msg: str | None = None,
+        user_msg_history: list[dict[str, str]] | None = None,
+        system_prompt: str | None = None,
+        img: Path | list[Path] | bytes | list[bytes] | None = None,
+    ) -> list[dict[str, Any]]:
         """
         Pure function: Converts raw inputs into a LiteLLM-compatible messages list.
         Decouples data prep from execution.
@@ -163,7 +155,7 @@ class LLMClient:
 
     # -------------------------------- Core LLM Interaction -------------------------------- #
     def get_embedding(
-        self, model: str, input_text: Union[str, List[str]], vllm_cmd: Optional[str] = None, **model_kwargs: Any
+        self, model: str, input_text: str | list[str], vllm_cmd: str | None = None, **model_kwargs: Any
     ) -> EmbeddingResponse:
         """
         Generates embeddings for the given input text using the specified model.
@@ -182,22 +174,21 @@ class LLMClient:
         # For custom local providers, model_kwargs need to be nested under 'extra_body'.
         model_kwargs = {"extra_body": model_kwargs} if custom_llm_provider else model_kwargs
 
-        response = embedding(
+        return embedding(
             model=model_id,
             input=input_text,
             api_base=api_base,
             custom_llm_provider=custom_llm_provider,
             **model_kwargs,
         )
-        return response
 
     def api_query(
         self,
         model: str,
-        user_msg: Optional[str] = None,
-        user_msg_history: Optional[List[Dict[str, str]]] = None,
-        system_prompt: Optional[str] = None,
-        img: Optional[Path | str | bytes | List[Path | str | bytes]] = None,
+        user_msg: str | None = None,
+        user_msg_history: list[dict[str, str]] | None = None,
+        system_prompt: str | None = None,
+        img: Path | str | bytes | list[Path | str | bytes] | None = None,
         stream: bool = False,
         return_usage: bool = False,
         **kwargs: Any,
@@ -234,9 +225,7 @@ class LLMClient:
         )
 
         # Intercept optional kwargs — explicit kwargs override model_configs
-        vllm_cmd = kwargs.pop("vllm_cmd", None)
-        if not vllm_cmd:
-            vllm_cmd = self._lookup_model_config(model)
+        vllm_cmd = kwargs.pop("vllm_cmd", None) or self._lookup_model_config(model)
 
         model_id, api_base, custom_llm_provider = self._resolve_routing(model, vllm_cmd=vllm_cmd)
         response = completion(
@@ -294,10 +283,10 @@ class LLMClient:
 
     def batch_api_query(
         self,
-        requests: List[Dict[str, Any]],
+        requests: list[dict[str, Any]],
         model: str,
         **kwargs: Any,
-    ) -> List[Union[ModelResponse, Exception]]:
+    ) -> list[ModelResponse | Exception]:
         """
         Executes parallel stateless batch requests with high throughput.
 
@@ -324,30 +313,26 @@ class LLMClient:
         ]
 
         # Intercept optional kwargs — explicit kwargs override model_configs
-        vllm_cmd = kwargs.pop("vllm_cmd", None)
-        if not vllm_cmd:
-            vllm_cmd = self._lookup_model_config(model)
+        vllm_cmd = kwargs.pop("vllm_cmd", None) or self._lookup_model_config(model)
 
         # 2. Execute Parallel Batch (IO-bound)
         model_id, api_base, custom_llm_provider = self._resolve_routing(model, vllm_cmd=vllm_cmd)
 
-        responses = batch_completion(
+        return batch_completion(
             model=model_id,
             messages=messages_batch,
             api_base=api_base,
             custom_llm_provider=custom_llm_provider,
-            max_workers=MAX_PARALLEL_REQUESTS if "max_workers" not in kwargs else kwargs.pop("max_workers"),
+            max_workers=kwargs.pop("max_workers", MAX_PARALLEL_REQUESTS),
             **kwargs,
         )
-
-        return responses
 
     def chat(
         self,
         model: str,
         user_msg: str,
-        system_prompt: Optional[str] = "",
-        img: Optional[Path | str | bytes | List[Path | str | bytes]] = None,
+        system_prompt: str | None = "",
+        img: Path | str | bytes | list[Path | str | bytes] | None = None,
         stream: bool = True,
         return_usage: bool = False,
         **kwargs: Any,
@@ -381,7 +366,6 @@ class LLMClient:
         )
 
         if stream is False:
-            api_response: ChatCompletion
             msg = api_response.choices[0].message
 
             self.messages.append({"role": "user", "content": user_msg})
@@ -419,11 +403,11 @@ class LLMClient:
         self.messages.append({"role": "tool", "tool_call_id": tool_call_id, "content": str(output)})
 
     # ----------------------------------- History Management ---------------------------------- #
-    def store_history(self, file_path: Union[str, Path]) -> None:
+    def store_history(self, file_path: str | Path) -> None:
         """Store message history to filesystem as JSON."""
         Path(file_path).write_text(json.dumps(self.messages, indent=2), encoding="utf-8")
 
-    def load_history(self, file_path: Union[str, Path]) -> None:
+    def load_history(self, file_path: str | Path) -> None:
         """Load message history from JSON filesystem."""
         if (p := Path(file_path)).exists():
             self.messages = json.loads(p.read_text(encoding="utf-8"))
@@ -440,7 +424,7 @@ class LLMClient:
     # ----------------------------------- Image Utilities ---------------------------------- #
     @staticmethod
     def downscale_img(
-        img: Union[str, bytes, Path, Image.Image],
+        img: str | bytes | Path | Image.Image,
         max_tokens: int,
         grid_size: int = 28,
         tokens_per_patch: int = 1,
@@ -456,9 +440,7 @@ class LLMClient:
         PNG: Max fidelity (lossless).
         """
         # 1. Normalize Input to PIL Image
-        if isinstance(img, Image.Image):
-            pass
-        elif isinstance(img, (str, Path)):
+        if isinstance(img, (str, Path)):
             src = str(img)
             if src.startswith("http"):
                 img = Image.open(io.BytesIO(requests.get(src, timeout=10).content))
@@ -466,7 +448,7 @@ class LLMClient:
                 img = Image.open(io.BytesIO(base64.b64decode(src.partition(",")[-1])))
             else:
                 img = Image.open(Path(src))
-        else:
+        elif not isinstance(img, Image.Image):
             img = Image.open(io.BytesIO(img) if isinstance(img, bytes) else img)
 
         # 2. Universal Resizing Logic
@@ -476,10 +458,7 @@ class LLMClient:
 
         w, h = img.size
         curr_tokens = get_tokens(w, h)
-
-        scale = 1.0
-        if curr_tokens > max_tokens:
-            scale = math.sqrt(max_tokens / curr_tokens)
+        scale = min(1.0, math.sqrt(max_tokens / curr_tokens))
 
         # Snap to Grid (Preserving Aspect Ratio)
         fw = max(grid_size, round((w * scale) / grid_size) * grid_size)
@@ -496,14 +475,10 @@ class LLMClient:
             img = img.resize((fw, fh), Image.Resampling.LANCZOS)
 
         # 3. Configurable Encoding (Optimized for Localhost)
-        if output_format.upper() in ["JPEG", "JPG"]:
-            if img.mode != "RGB":
-                img = img.convert("RGB")
-            save_params = {"quality": quality, "optimize": False}
-        elif output_format.upper() == "PNG":
-            save_params = {"optimize": False}
-        else:
-            save_params = {"quality": quality}
+        fmt = output_format.upper()
+        if fmt in ("JPEG", "JPG") and img.mode != "RGB":
+            img = img.convert("RGB")
+        save_params = {} if fmt == "PNG" else {"quality": quality}
 
         buf = io.BytesIO()
         img.save(buf, format=output_format, **save_params)

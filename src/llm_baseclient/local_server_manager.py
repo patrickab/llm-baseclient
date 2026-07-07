@@ -1,12 +1,9 @@
 import contextlib
-import json
 import os
 import shutil
 import socket
 import subprocess
 import time
-from typing import Optional
-import urllib
 
 import psutil
 import requests
@@ -29,7 +26,7 @@ class _LocalServerManager:
     """
 
     def __init__(self) -> None:
-        self._process: Optional[subprocess.Popen] = None
+        self._process: subprocess.Popen | None = None
 
     def _is_port_open(self, port: int) -> bool:
         """Checks if a localhost port is occupied."""
@@ -47,17 +44,14 @@ class _LocalServerManager:
         # Unload Ollama models via API (secure, cross-platform)
         if "ollama" in targets:
             try:
-                with urllib.request.urlopen(f"http://localhost:{OLLAMA_PORT}/api/ps", timeout=5) as response:
-                    data = json.load(response)
+                data = requests.get(f"http://localhost:{OLLAMA_PORT}/api/ps", timeout=5).json()
                 for model_info in data.get("models", []):
                     model_name = model_info["name"]
                     logger.warning(f"Unloading model via API: {model_name}")
-                    unload_data = json.dumps({"model": model_name, "keep_alive": 0}).encode("utf-8")
-                    req = urllib.request.Request(
-                        f"http://localhost:{OLLAMA_PORT}/api/generate", data=unload_data, headers={"Content-Type": "application/json"}
+                    requests.post(
+                        f"http://localhost:{OLLAMA_PORT}/api/generate", json={"model": model_name, "keep_alive": 0}, timeout=5
                     )
-                    urllib.request.urlopen(req, timeout=5)
-            except (urllib.error.URLError, json.JSONDecodeError, TimeoutError):
+            except requests.RequestException:
                 pass
 
         procs_to_kill = []
@@ -105,7 +99,7 @@ class _LocalServerManager:
             # Wait for defragmentation of GPU memory
             psutil.wait_procs(alive, timeout=2)
 
-    def _get_running_vllm_model(self, base_url: str) -> Optional[str]:
+    def _get_running_vllm_model(self, base_url: str) -> str | None:
         """Queries the vLLM /v1/models endpoint to check which model is loaded."""
         try:
             resp = requests.get(f"{base_url}/v1/models", timeout=1)
@@ -116,7 +110,7 @@ class _LocalServerManager:
         return None
 
     def _spawn_server(
-        self, cmd: list[str], health_check_url: str, install_hint: str, timeout: int = 120, cwd: Optional[str] = None
+        self, cmd: list[str], health_check_url: str, install_hint: str, timeout: int = 120, cwd: str | None = None
     ) -> None:
         if not shutil.which(cmd[0]):
             raise RuntimeError(f"Command not found: {cmd[0]}. {install_hint}")
@@ -142,7 +136,7 @@ class _LocalServerManager:
                 "LLM Baseclient: Server startup failed. GPU resources may be exhausted. Refer to console logs for details."
             ) from None
 
-    def ensure_vllm(self, model_name: str, vllm_cmd: Optional[list[str]] = None) -> None:
+    def ensure_vllm(self, model_name: str, vllm_cmd: list[str] | None = None) -> None:
         """Ensures a vLLM server is running with the specified model."""
         if self._get_running_vllm_model(VLLM_BASE_URL) == model_name:
             return
