@@ -7,7 +7,6 @@ dependencies = [
     "litellm>=1.80.5",
     "psutil>=7.1.3",
     "rich>=14.2.0",
-    "streamlit-paste-button>=0.1.2",
     "Pillow>=10.0.0",
     "requests>=2.31.0",
 ]
@@ -43,7 +42,8 @@ select = [
 ignore = [
   "RUF100",
   "B904",
-  "E701"
+  "E701",
+  "ANN401"  # `**kwargs: Any` is the correct annotation for pass-through kwargs
 ]
 
 [tool.ruff.lint.isort]

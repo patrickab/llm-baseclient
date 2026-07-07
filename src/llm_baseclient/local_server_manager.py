@@ -5,13 +5,13 @@ import shutil
 import socket
 import subprocess
 import time
-from typing import Any, Optional
+from typing import Optional
 import urllib
 
 import psutil
 import requests
 
-from llm_baseclient.config import OLLAMA_PORT, TABBY_DIR, TABBY_PORT, VLLM_BASE_URL, VLLM_PORT, vllm_default_command
+from llm_baseclient.config import OLLAMA_PORT, VLLM_BASE_URL, VLLM_PORT, vllm_default_command
 from llm_baseclient.logger import get_logger
 
 logger = get_logger()
@@ -21,7 +21,7 @@ logger = get_logger()
 
 class _LocalServerManager:
     """
-    Manages server processes for vLLM, Ollama, or TabbyAPI.
+    Manages server processes for vLLM and Ollama.
     Assumes requested models to be available.
     Ensures server is terminated upon exit.
     Designed for single-GPU multi-backend usage.
@@ -38,7 +38,7 @@ class _LocalServerManager:
 
     def _kill_inference_engines(self, targets: set[str]) -> None:
         """
-        Scans system processes owned by the CURRENT USER for Ollama, vLLM, or TabbyAPI signatures
+        Scans system processes owned by the CURRENT USER for Ollama or vLLM signatures
         and force-kills them. Relies on API calls for system-level services.
         """
         current_pid = os.getpid()
@@ -71,9 +71,13 @@ class _LocalServerManager:
                 if proc.info["username"] != current_user:
                     continue
 
-                cmd_str = " ".join(proc.info["cmdline"]).lower()
+                # Match executable basename or process title exactly (vLLM workers retitle
+                # to e.g. "VLLM::EngineCore"), never substrings of the full cmdline —
+                # substring matching kills unrelated processes (e.g. an editor with ollama.md open).
+                name = (proc.info["name"] or "").lower()
+                exe_base = os.path.basename(proc.info["cmdline"][0]).lower()
 
-                if any(t in cmd_str for t in targets):
+                if any(t in (name, exe_base) or name.startswith(f"{t}:") for t in targets):
                     if proc.info["pid"] == current_pid:
                         continue
                     procs_to_kill.append(proc)
@@ -114,7 +118,7 @@ class _LocalServerManager:
     def _spawn_server(
         self, cmd: list[str], health_check_url: str, install_hint: str, timeout: int = 120, cwd: Optional[str] = None
     ) -> None:
-        if not shutil.which(cmd[0]) and "tabbyAPI" not in cmd[0]:
+        if not shutil.which(cmd[0]):
             raise RuntimeError(f"Command not found: {cmd[0]}. {install_hint}")
 
         self._process = subprocess.Popen(cmd, cwd=cwd)
@@ -138,65 +142,36 @@ class _LocalServerManager:
                 "LLM Baseclient: Server startup failed. GPU resources may be exhausted. Refer to console logs for details."
             ) from None
 
-    def ensure_vllm(self, model_name: str, vllm_cmd: Optional[str] = None) -> None:
+    def ensure_vllm(self, model_name: str, vllm_cmd: Optional[list[str]] = None) -> None:
         """Ensures a vLLM server is running with the specified model."""
         if self._get_running_vllm_model(VLLM_BASE_URL) == model_name:
             return
 
         logger.info(f"Switching to vLLM ({model_name})...")
-        self._kill_inference_engines(targets={"vllm", "ollama", "ollama runner", "tabby"})
+        self._kill_inference_engines(targets={"vllm", "ollama"})
 
         # NOTE: --allow-remote-code is needed for some custom models
         vllm_url = f"http://localhost:{VLLM_PORT}/v1/models"
         if not vllm_cmd:
             vllm_cmd = vllm_default_command(model_name)
-        try:
-            self._spawn_server(cmd=vllm_cmd, health_check_url=vllm_url, install_hint="Install via: pip install vllm")
-        except RuntimeError as e:
-            raise e from None
+        self._spawn_server(cmd=vllm_cmd, health_check_url=vllm_url, install_hint="Install via: pip install vllm")
 
     def ensure_ollama(self, model_name: str) -> None:
-        """Ensures an Ollama server is running."""
-        subprocess.call(["ollama", "pull", model_name], stderr=subprocess.DEVNULL)
+        """Ensures an Ollama server is running and the model is downloaded."""
         if self._is_port_open(OLLAMA_PORT):
             # If Ollama is running, just ensure vLLM is off
-            self._kill_inference_engines(targets={"vllm", "tabby"})
-            return
+            self._kill_inference_engines(targets={"vllm"})
+        else:
+            logger.info("Switching to Ollama...")
+            self._kill_inference_engines(targets={"vllm", "ollama"})  # kill ollama zombies
+            self._spawn_server(
+                cmd=["ollama", "serve"],
+                health_check_url=f"http://localhost:{OLLAMA_PORT}",
+                install_hint="Install via: https://ollama.com",
+            )
 
-        logger.info("Switching to Ollama...")
-        self._kill_inference_engines(targets={"vllm", "ollama", "ollama runner", "tabby"})  # kill ollama zombies
-        self._spawn_server(
-            cmd=["ollama", "serve"], health_check_url=f"http://localhost:{OLLAMA_PORT}", install_hint="Install via: https://ollama.com"
-        )
-
-    def ensure_tabby(self, model_name: Optional[str] = None, tabby_config: Optional[dict[str, Any]] = None) -> None:
-        """Ensures TabbyAPI server is running."""
-        if self._is_port_open(TABBY_PORT):
-            self._kill_inference_engines(targets={"vllm", "ollama", "ollama runner"})
-            return
-        logger.info("Switching to TabbyAPI...")
-        self._kill_inference_engines(targets={"vllm", "ollama", "ollama runner", "tabby"})
-
-        TABBY_PYTHON = os.path.join(TABBY_DIR, "venv", "bin", "python")
-        TABBY_START = os.path.join(TABBY_DIR, "start.py")
-        cmd = [TABBY_PYTHON, TABBY_START]
-
-        self._spawn_server(
-            cmd=cmd,
-            health_check_url=f"http://localhost:{TABBY_PORT}/v1/models",
-            install_hint="Ensure TabbyAPI is configured and 'start.py' is executable.",
-            cwd=TABBY_DIR,
-        )
-
-        # Configure model
-        payload = {
-            "model_name": model_name,
-            "max_seq_len": tabby_config["max_seq_len"],
-            "cache_mode": tabby_config["cache_mode"],
-        }
-
-        response = requests.post(
-            f"http://localhost:{TABBY_PORT}/v1/model/load",
-            json=payload,
-        )
-        response.raise_for_status()
+        # Pull only if missing — pulling unconditionally costs a registry round-trip per query.
+        res = subprocess.run(["ollama", "list"], capture_output=True, text=True)
+        installed = {line.split()[0] for line in res.stdout.splitlines()[1:] if line.strip()}
+        if model_name not in installed and f"{model_name}:latest" not in installed:
+            subprocess.call(["ollama", "pull", model_name], stderr=subprocess.DEVNULL)

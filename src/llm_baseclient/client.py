@@ -21,11 +21,8 @@ from openai.types.chat import ChatCompletion
 from PIL import Image
 import requests
 
-from llm_baseclient.config import MAX_PARALLEL_REQUESTS, OLLAMA_PORT, SYS_NOTE_TO_OBSIDIAN_YAML, TABBY_PORT, VLLM_PORT, ModelConfigs
+from llm_baseclient.config import MAX_PARALLEL_REQUESTS, OLLAMA_PORT, VLLM_PORT, ModelConfigs
 from llm_baseclient.local_server_manager import _LocalServerManager
-from llm_baseclient.logger import get_logger
-
-logger = get_logger()
 
 
 # ----------------------------------- Client ---------------------------------- #
@@ -62,20 +59,17 @@ class LLMClient:
         and a _LocalServerManager for handling local inference servers.
 
         Args:
-            model_configs: Optional per-model configurations for vLLM and ExLlama backends.
+            model_configs: Optional per-model configurations for the vLLM backend.
         """
         self.messages: List[Dict[str, str]] = []
         self.model_configs = model_configs or {}
         self.server_manager = _LocalServerManager()
 
     # ----------------------------------- Data Wrangling ---------------------------------- #
-    def _lookup_model_config(self, model: str) -> tuple[str | None, dict[str, Any] | None]:
-        """Returns (vllm_cmd_list, tabby_config) from stored model_configs for the given model."""
-        vcc = self.model_configs.get("vllm", {})
-        ecc = self.model_configs.get("exllama", {})
-        vllm_cmd = vcc.get(model, {}).get("vllm_cmd")
-        tabby_config = ecc.get(model)
-        return vllm_cmd.split() if vllm_cmd else None, tabby_config
+    def _lookup_model_config(self, model: str) -> list[str] | None:
+        """Returns the vllm_cmd list from stored model_configs for the given model."""
+        vllm_cmd = self.model_configs.get("vllm", {}).get(model, {}).get("vllm_cmd")
+        return vllm_cmd.split() if vllm_cmd else None
 
     def _process_image(self, img: Union[Path, bytes, str]) -> str:
         """Standardizes image inputs (Path, bytes, or data-URI) into a Base64 data URI or passes URL."""
@@ -98,15 +92,14 @@ class LLMClient:
         b64_encoded = base64.b64encode(img).decode("utf-8")
         return f"data:{mime_type};base64,{b64_encoded}"
 
-    def _resolve_routing(
-        self, model_input: str, vllm_cmd: Optional[str] = None, tabby_config: Optional[dict[str, Any]] = None
-    ) -> Tuple[Optional[str], Optional[str]]:
+    def _resolve_routing(self, model_input: str, vllm_cmd: Optional[list[str]] = None) -> Tuple[str, Optional[str], Optional[str]]:
         """
         Parses 'provider/model' and handles local server spawning.
+        Returns (model_id, api_base, custom_llm_provider).
         vllm_cmd allows customizing vLLM server startup behavior.
         """
         if "/" not in model_input:
-            raise Warning(f"Model format must be 'provider/model_name'. Got: {model_input}\nFalling back to openai/{model_input}")
+            raise ValueError(f"Model format must be 'provider/model_name'. Got: {model_input}")
 
         provider, model_name = model_input.split("/", 1)
 
@@ -120,11 +113,6 @@ class LLMClient:
             model_id = model_name
             url = f"http://localhost:{OLLAMA_PORT}"
             provider = "ollama"
-        elif provider == "tabby":
-            self.server_manager.ensure_tabby(model_name, tabby_config=tabby_config)
-            model_id = model_input.replace("tabby/", "")
-            url = f"http://localhost:{TABBY_PORT}/v1/"
-            provider = "openai"  # Tabby uses OpenAI-compatible API.
         else:  # Commercial provider via LiteLLM
             model_id = model_input
             url = None
@@ -175,7 +163,7 @@ class LLMClient:
 
     # -------------------------------- Core LLM Interaction -------------------------------- #
     def get_embedding(
-        self, model: str, input_text: Union[str, List[str]], vllm_cmd: Optional[str] = None, **model_kwargs: Dict[str, any]
+        self, model: str, input_text: Union[str, List[str]], vllm_cmd: Optional[str] = None, **model_kwargs: Any
     ) -> EmbeddingResponse:
         """
         Generates embeddings for the given input text using the specified model.
@@ -190,7 +178,7 @@ class LLMClient:
         Returns:
             An EmbeddingResponse object containing the generated embeddings.
         """
-        model_id, api_base, custom_llm_provider = self._resolve_routing(model, vllm_cmd=vllm_cmd)
+        model_id, api_base, custom_llm_provider = self._resolve_routing(model, vllm_cmd=vllm_cmd.split() if vllm_cmd else None)
         # For custom local providers, model_kwargs need to be nested under 'extra_body'.
         model_kwargs = {"extra_body": model_kwargs} if custom_llm_provider else model_kwargs
 
@@ -209,11 +197,11 @@ class LLMClient:
         user_msg: Optional[str] = None,
         user_msg_history: Optional[List[Dict[str, str]]] = None,
         system_prompt: Optional[str] = None,
-        img: Optional[Path | List[Path] | bytes | List[bytes]] = None,
+        img: Optional[Path | str | bytes | List[Path | str | bytes]] = None,
         stream: bool = False,
         return_usage: bool = False,
-        **kwargs: Dict[str, Any],
-    ) -> Iterator[str] | ChatCompletion:
+        **kwargs: Any,
+    ) -> Iterator[str | dict[str, int]] | ChatCompletion:
         """
         Executes a raw API query to an LLM, supporting text-only and multimodal inputs,
         streaming and non-streaming responses, and various providers.
@@ -224,7 +212,7 @@ class LLMClient:
             user_msg_history: A list of message dictionaries representing prior conversation turns.
                               Each dictionary should have 'role' and 'content' keys.
             system_prompt: An optional system-level instruction for the model.
-            img: Optional image input(s) as file paths, raw bytes, or a list of these.
+            img: Optional image input(s) as file paths, URLs, data URIs, raw bytes, or a list of these.
             stream: If True, returns an iterator yielding chunks of the response.
                     If False, returns a complete ChatCompletion object.
             return_usage: If True and streaming, yields a final dict with
@@ -234,96 +222,81 @@ class LLMClient:
                       (e.g., `temperature`, `top_p`, `max_tokens`).
 
         Returns:
-            An iterator of strings if `stream` is True, or a ChatCompletion object if `stream` is False.
+            An iterator of string chunks (plus a final usage dict if `return_usage`)
+            if `stream` is True, or a ChatCompletion object if `stream` is False.
 
         Raises:
-            Exception: If an error occurs during the API call.
+            Whatever LiteLLM raises on API failure (e.g., authentication, rate limit, connection errors).
         """
 
         messages = self._construct_message_payload(
             user_msg=user_msg, user_msg_history=user_msg_history, system_prompt=system_prompt, img=img
         )
 
-        # tabby does not support reasoning
-        reasoning_effort = kwargs.pop("reasoning_effort", None)
-        reasoning_effort = None if "tabby/" in model else reasoning_effort
-
-        # dummy api key for openai-compatibility
-        # other models use environment variables or no auth
-        if "tabby/" in model and "api_key" not in kwargs:
-            kwargs["api_key"] = "tabby-dummy-key"
-
         # Intercept optional kwargs — explicit kwargs override model_configs
         vllm_cmd = kwargs.pop("vllm_cmd", None)
-        tabby_config = kwargs.pop("tabby_config", None)
-        if not vllm_cmd and not tabby_config:
-            vllm_cmd, tabby_config = self._lookup_model_config(model)
+        if not vllm_cmd:
+            vllm_cmd = self._lookup_model_config(model)
 
-        model_id, api_base, custom_llm_provider = self._resolve_routing(model, vllm_cmd=vllm_cmd, tabby_config=tabby_config)
-        try:
-            response = completion(
-                model=model_id,
-                messages=messages,
-                stream=stream,
-                api_base=api_base,
-                reasoning_effort=reasoning_effort,
-                custom_llm_provider=custom_llm_provider,  # Defaults to None for commercial providers.
-                stream_options={"include_usage": True} if stream else None,
-                **kwargs,  # Passes additional model parameters like temperature, top_p, max_tokens.
-            )
-            if stream is False:
-                return response
-            else:
+        model_id, api_base, custom_llm_provider = self._resolve_routing(model, vllm_cmd=vllm_cmd)
+        response = completion(
+            model=model_id,
+            messages=messages,
+            stream=stream,
+            api_base=api_base,
+            custom_llm_provider=custom_llm_provider,  # Defaults to None for commercial providers.
+            stream_options={"include_usage": True} if stream else None,
+            **kwargs,  # Passes additional model parameters like temperature, top_p, max_tokens.
+        )
+        if stream is False:
+            return response
 
-                def stream_generator() -> Iterator[str]:
-                    """
-                    Generator wrapper to isolate `yield` keyword from outer function scope.
-                    Allows the outer function to conditionally return `Iterator[Str] | ChatCompletion`
-                    """
-                    in_reasoning = False
-                    last_usage = None
-                    for chunk in response:
-                        usage = getattr(chunk, "usage", None)
-                        if usage is not None:
-                            last_usage = {
-                                "prompt_tokens": usage.prompt_tokens,
-                                "completion_tokens": usage.completion_tokens,
-                                "total_tokens": usage.total_tokens,
-                            }
-                            continue
+        def stream_generator() -> Iterator[str | dict[str, int]]:
+            """
+            Generator wrapper to isolate `yield` keyword from outer function scope.
+            Allows the outer function to conditionally return `Iterator | ChatCompletion`
+            """
+            in_reasoning = False
+            last_usage = None
+            for chunk in response:
+                usage = getattr(chunk, "usage", None)
+                if usage is not None:
+                    last_usage = {
+                        "prompt_tokens": usage.prompt_tokens,
+                        "completion_tokens": usage.completion_tokens,
+                        "total_tokens": usage.total_tokens,
+                    }
+                    continue
 
-                        delta = chunk.choices[0].delta
-                        reasoning = getattr(delta, "reasoning_content", None)
-                        content = delta.content
+                delta = chunk.choices[0].delta
+                reasoning = getattr(delta, "reasoning_content", None)
+                content = delta.content
 
-                        if reasoning:
-                            if not in_reasoning:
-                                yield "<thought>\n"
-                                in_reasoning = True
-                            yield reasoning
+                if reasoning:
+                    if not in_reasoning:
+                        yield "<thought>\n"
+                        in_reasoning = True
+                    yield reasoning
 
-                        if content:
-                            if in_reasoning:
-                                yield "\n</thought>"
-                                in_reasoning = False
-                            yield content
-
+                if content:
                     if in_reasoning:
                         yield "\n</thought>"
+                        in_reasoning = False
+                    yield content
 
-                    if return_usage and last_usage:
-                        yield last_usage
+            if in_reasoning:
+                yield "\n</thought>"
 
-                return stream_generator()
-        except Exception as e:
-            logger.error("Error during API query: %s", e, stacklevel=2)
-            return Exception("API query failed")
+            if return_usage and last_usage:
+                yield last_usage
+
+        return stream_generator()
 
     def batch_api_query(
         self,
         requests: List[Dict[str, Any]],
         model: str,
-        **kwargs: Dict[str, Any],
+        **kwargs: Any,
     ) -> List[Union[ModelResponse, Exception]]:
         """
         Executes parallel stateless batch requests with high throughput.
@@ -353,7 +326,7 @@ class LLMClient:
         # Intercept optional kwargs — explicit kwargs override model_configs
         vllm_cmd = kwargs.pop("vllm_cmd", None)
         if not vllm_cmd:
-            vllm_cmd, _ = self._lookup_model_config(model)
+            vllm_cmd = self._lookup_model_config(model)
 
         # 2. Execute Parallel Batch (IO-bound)
         model_id, api_base, custom_llm_provider = self._resolve_routing(model, vllm_cmd=vllm_cmd)
@@ -374,11 +347,11 @@ class LLMClient:
         model: str,
         user_msg: str,
         system_prompt: Optional[str] = "",
-        img: Optional[Path | List[Path] | bytes | List[bytes]] = None,
+        img: Optional[Path | str | bytes | List[Path | str | bytes]] = None,
         stream: bool = True,
         return_usage: bool = False,
-        **kwargs: Dict[str, Any],
-    ) -> Iterator[str] | ChatCompletion:
+        **kwargs: Any,
+    ) -> Iterator[str | dict[str, int]] | ChatCompletion:
         """
         Stateful chat wrapper around `api_query` to maintain and update conversation history.
 
@@ -422,7 +395,7 @@ class LLMClient:
                 self.messages.append({"role": "assistant", "content": content})
             return api_response
 
-        def _chat_generator() -> Iterator[str]:
+        def _chat_generator() -> Iterator[str | dict[str, int]]:
             """
             Generator wrapper to isolate `yield` keyword from outer function scope.
             Allows the outer function to conditionally return `Iterator[Str] | ChatCompletion`
@@ -462,37 +435,9 @@ class LLMClient:
     # ----------------------------------- Cleanup ---------------------------------- #
     def kill_inference_engines(self) -> None:
         """Cleans up any background processes."""
-        self.server_manager._kill_inference_engines(targets={"vllm", "ollama", "ollama runner", "tabby"})
+        self.server_manager._kill_inference_engines(targets={"vllm", "ollama"})
 
     # ----------------------------------- Image Utilities ---------------------------------- #
-    @staticmethod
-    def write_to_md(file_path: Path, message: str) -> None:
-        """Writes a simple text message to a markdown file."""
-        file_path.parent.mkdir(parents=True, exist_ok=True)
-        file_path.write_text(message, encoding="utf-8")
-
-    def write_to_obsidian(
-        self,
-        file_path: Path,
-        message: str,
-        model: str,
-        **kwargs: Dict[str, Any],
-    ) -> None:
-        """
-        Writes a message to a markdown file, prepending an AI-generated YAML frontmatter block suitable for Obsidian.
-
-        Args:
-            file_path: The pathlib Path where the markdown file should be written.
-            message: The content to write.
-            model: The LLM model used for generating the header.
-            **kwargs: Additional parameters passed to the model (e.g., temperature).
-        """
-        system_prompt = SYS_NOTE_TO_OBSIDIAN_YAML.replace("{{file_name_no_ext}}", file_path.stem).replace("{{user_notes}}", message)
-        response: ChatCompletion = self.api_query(model=model, user_msg=message, system_prompt=system_prompt, stream=False, **kwargs)
-        yaml_header = response.choices[0].message.content
-
-        self.write_to_md(file_path, f"{yaml_header}\n{message}")
-
     @staticmethod
     def downscale_img(
         img: Union[str, bytes, Path, Image.Image],
@@ -513,10 +458,6 @@ class LLMClient:
         # 1. Normalize Input to PIL Image
         if isinstance(img, Image.Image):
             pass
-        elif hasattr(img, "image_data"):  # Streamlit PasteResult (if passed directly)
-            img = img.image_data  # type: ignore
-            if not isinstance(img, Image.Image):
-                raise ValueError("Invalid image type from PasteResult.")
         elif isinstance(img, (str, Path)):
             src = str(img)
             if src.startswith("http"):

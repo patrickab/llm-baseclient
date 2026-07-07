@@ -3,7 +3,6 @@ from logging import Logger
 
 from rich.console import Console
 from rich.logging import RichHandler
-from rich.traceback import install as install_rich_tracebacks
 
 
 def get_logger() -> Logger:
