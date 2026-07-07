@@ -19,7 +19,7 @@ from litellm import batch_completion, completion, embedding
 from litellm.types.utils import ModelResponse
 from litellm.utils import EmbeddingResponse
 from openai.types.chat import ChatCompletion
-from PIL import Image
+from PIL import Image, ImageOps
 import requests
 
 from llm_baseclient.config import MAX_PARALLEL_REQUESTS, OLLAMA_PORT, VLLM_PORT, ModelConfigs
@@ -436,6 +436,8 @@ class LLMClient:
         Preserves aspect ratio (area-scaling) and aligns to ViT patches (grid_size) for spatial accuracy.
         Optimizes GPU inference efficiency within token budget.
 
+        `quality` only affects payload bytes, never tokens (tokens depend on pixel dims alone).
+
         JPEG: Fastest TTFT (optimized CPU decoding).
         PNG: Max fidelity (lossless).
         """
@@ -450,6 +452,7 @@ class LLMClient:
                 img = Image.open(Path(src))
         elif not isinstance(img, Image.Image):
             img = Image.open(io.BytesIO(img) if isinstance(img, bytes) else img)
+        img = ImageOps.exif_transpose(img)  # re-encoding drops the EXIF orientation tag
 
         # 2. Universal Resizing Logic
         def get_tokens(w: int, h: int) -> int:
